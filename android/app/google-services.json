@@ -1,0 +1,185 @@
+{
+  "project_info": {
+    "project_number": "868065464203",
+    "project_id": "lilly-drive",
+    "storage_bucket": "lilly-drive.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:868065464203:android:0bb2f23cd91998d049e98e",
+        "android_client_info": {
+          "package_name": "com.example.lily_drive"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "868065464203-304gu1u1258v6rl118cjg46sbjso731n.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.lily_drive",
+            "certificate_hash": "f624267c4f7183e1495f720555d750f628d0d1f9"
+          }
+        },
+        {
+          "client_id": "868065464203-4i91r1numsocm6ils9ta0jlheqlcjaka.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.lily_drive",
+            "certificate_hash": "fd1c5deec75cb294c5ef4971cb92959eaf375bbf"
+          }
+        },
+        {
+          "client_id": "868065464203-mjfnd1qbgg7kp8shn6sl0rct7brrimi1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.lily_drive",
+            "certificate_hash": "479694ad9361320db26756edc03de9f3aeb3ca79"
+          }
+        },
+        {
+          "client_id": "868065464203-qlh92fvek1srcmg5cnd45nd8tb28daqu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.lily_drive",
+            "certificate_hash": "e3fb51b9e1be13cb8aedebf11471d57a9b25b2ce"
+          }
+        },
+        {
+          "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMQCbS9SKrTlZDy3CemKLYTXdNyc5YWns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:868065464203:android:3754961102b31ddd49e98e",
+        "android_client_info": {
+          "package_name": "com.noobdev.lilycaptain.lilycaptain"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "868065464203-61jegd7bciuu29gbkont05ngeltkl83d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "e3fb51b9e1be13cb8aedebf11471d57a9b25b2ce"
+          }
+        },
+        {
+          "client_id": "868065464203-7nalq46rj40naah9fq85horqaoq47mre.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "f624267c4f7183e1495f720555d750f628d0d1f9"
+          }
+        },
+        {
+          "client_id": "868065464203-cplb27h5v6kh0lvjodj51mr6hh8m47eq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "479694ad9361320db26756edc03de9f3aeb3ca79"
+          }
+        },
+        {
+          "client_id": "868065464203-f4r9l7v0jpcn32bsj8i1tamj552gl838.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "fd1c5deec75cb294c5ef4971cb92959eaf375bbf"
+          }
+        },
+        {
+          "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMQCbS9SKrTlZDy3CemKLYTXdNyc5YWns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:868065464203:android:d9cb8e72b1d6ae9049e98e",
+        "android_client_info": {
+          "package_name": "com.nooobdev.lilycaptain.lilycaptain"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "868065464203-0ku0fdkkpi3pnabh4tikr0f37t8eruqu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nooobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "e3fb51b9e1be13cb8aedebf11471d57a9b25b2ce"
+          }
+        },
+        {
+          "client_id": "868065464203-2jioeoveqc4p2v9c4l2s53dg0g88tf2e.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nooobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "fd1c5deec75cb294c5ef4971cb92959eaf375bbf"
+          }
+        },
+        {
+          "client_id": "868065464203-k0nuo77fp5t0uvohmdsq6elu0b7mbgl9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nooobdev.lilycaptain.lilycaptain",
+            "certificate_hash": "f624267c4f7183e1495f720555d750f628d0d1f9"
+          }
+        },
+        {
+          "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMQCbS9SKrTlZDy3CemKLYTXdNyc5YWns"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "868065464203-74h2afb3f06p3e4ocie11t53eghupk8n.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
