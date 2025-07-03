@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_vibrate/flutter_vibrate.dart';
+import 'package:vibration/vibration.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -266,36 +266,53 @@ class EmergencySosService {
     }
   }
 
-  // Start vibration pattern using flutter_vibrate
+  // Start vibration pattern using vibration package
   void _startVibration() async {
     try {
-      // First check if vibration is enabled in settings
-      bool canVibrate = false;
+      // First check if vibration is supported
+      bool? hasVibrator = false;
       try {
         await PermissionService.requestVibratePermission();
-        canVibrate = await Vibrate.canVibrate;
-        print("Can vibrate: $canVibrate");
+        hasVibrator = await Vibration.hasVibrator();
+        print("Has vibrator: $hasVibrator");
       } catch (e) {
         print("Error checking vibration capability: $e");
-        canVibrate = false;
+        hasVibrator = false;
       }
 
-      if (canVibrate) {
+      if (hasVibrator == true) {
         _stopVibration(); // Stop any existing vibration first
 
         // Set a flag to track if vibration is active
         _vibrationActive = true;
 
-        _vibrationTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) {
+        // Create SOS pattern (... --- ...)
+        // Short pulses followed by long pulses followed by short pulses
+        final List<int> sosPattern = [
+          300, 100, 300, 100, 300, 100,  // ... (3 short)
+          500, 100, 500, 100, 500, 100,  // --- (3 long)
+          300, 100, 300, 100, 300, 100,  // ... (3 short)
+        ];
+
+        _vibrationTimer = Timer.periodic(const Duration(milliseconds: 3000), (timer) {
           if (!_vibrationActive) {
             timer.cancel();
             return;
           }
 
           try {
-            Vibrate.feedback(FeedbackType.heavy);
+            // Check if pattern vibration is supported
+            Vibration.hasCustomVibrationsSupport().then((hasCustomVibration) {
+              if (hasCustomVibration == true) {
+                // Use pattern vibration
+                Vibration.vibrate(pattern: sosPattern, repeat: 0);
+              } else {
+                // Fallback to simple vibration
+                Vibration.vibrate(duration: 1000);
+              }
+            });
           } catch (e) {
-            print("Vibration feedback error: $e");
+            print("Vibration error: $e");
             // Don't keep trying if we get permission errors
             if (e.toString().contains("permission")) {
               timer.cancel();
@@ -318,6 +335,9 @@ class EmergencySosService {
       _vibrationTimer?.cancel();
       _vibrationTimer = null;
       _vibrationActive = false;
+
+      // Stop any active vibration
+      Vibration.cancel();
 
       print("Vibration stopped");
     } catch (e) {
