@@ -204,6 +204,7 @@ class RideController extends ChangeNotifier {
 
   // Set up a listener for a specific request to detect confirmation
 // Set up a listener for a specific request to detect confirmation
+// Set up a listener for a specific request to detect confirmation
   void _setupRequestListener(String requestId) {
     print('[$_currentTimestamp] [$_currentUserLogin] Setting up request confirmation listener for $requestId');
 
@@ -239,6 +240,9 @@ class RideController extends ChangeNotifier {
               captainId: confirmedDriverId
           );
 
+          // SEND WELCOME MESSAGE RIGHT HERE when the passenger confirms
+          _sendWelcomeMessage();
+
           // Mark as en route to pickup
           _passengerService.updateCaptainStatus(requestId, 'en_route_to_pickup')
               .then((_) {
@@ -269,6 +273,27 @@ class RideController extends ChangeNotifier {
     });
   }
 
+// Add this helper method to send the welcome message
+  Future<void> _sendWelcomeMessage() async {
+    if (currentRide == null) return;
+
+    try {
+      print('[$_currentTimestamp] [$_currentUserLogin] Sending welcome message for ride: ${currentRide!.id}');
+
+      // Create an instance of ChatService
+      final ChatService _chatService = ChatService();
+
+      // Send welcome message
+      await _chatService.sendMessage(
+          currentRide!.id,
+          "Hello! I'm ${driverName}, your driver for today. I'm on my way to pick you up! 🚗"
+      );
+
+      print('[$_currentTimestamp] [$_currentUserLogin] Welcome message sent successfully');
+    } catch (e) {
+      print('[$_currentTimestamp] [$_currentUserLogin] Error sending welcome message: $e');
+    }
+  }
   // Check for active ride
   Future<void> _checkActiveRide() async {
     try {
@@ -542,7 +567,6 @@ class RideController extends ChangeNotifier {
           rideState = RideState.enrouteToPickup;
           stateChanged = true;
 
-          // 🎯 SEND WELCOME MESSAGE AUTOMATICALLY
           _sendWelcomeMessage();
 
           // Show route to pickup
@@ -835,28 +859,6 @@ class RideController extends ChangeNotifier {
     showRequestsList = show;
     notifyListeners();
   }
-  // In your RideController, when opening chat:
-  Future<void> _sendWelcomeMessage() async {
-    if (currentRide == null) return;
-
-    try {
-      print('[2025-06-05 20:43:26] [Lilydebug] Sending welcome message for ride: ${currentRide!.id}');
-
-      // Import your ChatService
-      final ChatService _chatService = ChatService();
-
-      // Send welcome message
-      await _chatService.sendMessage(
-          currentRide!.id,
-          "Hello! I'm ${driverName}, your driver for today. I'm on my way to pick you up! 🚗"
-      );
-
-      print('[2025-06-05 20:43:26] [Lilydebug] Welcome message sent successfully');
-
-    } catch (e) {
-      print('[2025-06-05 20:43:26] [Lilydebug] Error sending welcome message: $e');
-    }
-  }
 
   // Accept a passenger request
 // Accept a passenger request
@@ -938,7 +940,6 @@ class RideController extends ChangeNotifier {
       notifyListeners();
     }
   }
-
   // Confirm pickup and start ride
   Future<void> confirmPickup() async {
     if (currentRide == null) return;
