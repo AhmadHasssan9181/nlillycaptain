@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../screens/ride_history_screen.dart';  // Add this import
 import '../screens/earnings_screen.dart';
+import '../services/location_service.dart';  // Add this import
 
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -40,6 +41,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   bool _showRideHistoryScreen = false;  // Add this
   bool _showEarningsScreen = false;
+  // Add this with your other variables
+  late LocationService _locationService;
+  bool _isLocationServiceInitialized = false;
 
 
   // UI State
@@ -58,11 +62,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   late EmergencySosService _sosService;
   bool _isSosInitialized = false;
 
+  void _initializeLocationService() {
+    if (!_isLocationServiceInitialized) {
+      _locationService = LocationService();
+
+      // Configure update frequency
+      _locationService.configure(
+        normalIntervalMs: 10000,  // 10 seconds when not in ride
+        rideIntervalMs: 3000,     // 3 seconds during active ride
+      );
+
+      // Set callback for location updates
+      _locationService.onLocationChanged = (LatLng location) {
+        // Use your existing method to update controllers
+        _updateLocationInBothControllers(location);
+      };
+
+      // Start tracking
+      _locationService.startTracking();
+
+      // Listen for ride state changes to adjust update frequency
+      _rideController.addListener(() {
+        _locationService.setRideMode(_rideController.isInRide);
+      });
+
+      _isLocationServiceInitialized = true;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _initializeControllers();
     _initializeEmergencySOS();
+    _initializeLocationService();
     _checkPermissions();
 
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -275,7 +308,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _controllersInitialized = false;
     _rideController.dispose();
     _mapController.dispose();
-
+    if (_isLocationServiceInitialized) {
+      _locationService.dispose();
+    }
     // Stop SOS monitoring when leaving the screen
     if (_isSosInitialized) {
       _sosService.stopMonitoring();
