@@ -25,10 +25,6 @@ class RideController extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // System info
-  final String _currentTimestamp = "2025-06-04 00:52:54";
-  final String _currentUserLogin = "Lilydebug";
-
   // Driver info
   String driverName = "Driver";
   String driverImage = "https://randomuser.me/api/portraits/men/32.jpg";
@@ -61,6 +57,7 @@ class RideController extends ChangeNotifier {
   Function(LatLng)? onShowRoute;
   Function()? onClearRoute;
   Function()? onClearMarkers;
+  Function(String)? onClearPickupMarker; // Clears specific marker by ID
 
   // Computed property
   bool get isInRide =>
@@ -70,7 +67,6 @@ class RideController extends ChangeNotifier {
 
   // Initialize controller with data
   void initialize() async {
-    print('[$_currentTimestamp] [$_currentUserLogin] Initializing RideController');
     await _loadDriverProfile();
     await _checkActiveRide();
 
@@ -87,7 +83,7 @@ class RideController extends ChangeNotifier {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
-        print('[$_currentTimestamp] [$_currentUserLogin] No authenticated user found');
+        print('No authenticated user found');
         return;
       }
 
@@ -96,7 +92,7 @@ class RideController extends ChangeNotifier {
 
       final driverDoc = await _firestore.collection('Taxis').doc(currentUser.uid).get();
       if (!driverDoc.exists) {
-        print('[$_currentTimestamp] [$_currentUserLogin] No driver profile found in database');
+        print('No driver profile found in database');
         return;
       }
 
@@ -104,10 +100,7 @@ class RideController extends ChangeNotifier {
 
       driverName = driverData['name'] ?? driverData['driverName'] ?? driverName;
       driverImage = driverData['profileImage'] ?? driverData['driverImage'] ?? driverImage;
-
-      // Correctly load the 'isOnline' boolean field
       isOnline = driverData['isOnline'] ?? false;
-
       totalEarningsToday = _extractDouble(driverData['todayEarnings'] ?? driverData['earnings']) ?? 0.0;
       rating = _extractDouble(driverData['rating']) ?? 4.5;
       rank = driverData['rank'] ?? "New";
@@ -118,10 +111,9 @@ class RideController extends ChangeNotifier {
         arrivalRadius = _extractDouble(settings['arrivalRadius']) ?? 50.0;
       }
 
-      print('[$_currentTimestamp] [$_currentUserLogin] Driver profile loaded: $driverName, online: $isOnline, earnings: $totalEarningsToday');
       notifyListeners();
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error loading driver profile: $e');
+      print('Error loading driver profile: $e');
     }
   }
 
@@ -151,9 +143,8 @@ class RideController extends ChangeNotifier {
           'isAvailable': available,
           'lastUpdated': FieldValue.serverTimestamp(),
         });
-        print('[$_currentTimestamp] [$_currentUserLogin] Driver Firestore isAvailable updated to: $available');
       } catch (e) {
-        print('[$_currentTimestamp] [$_currentUserLogin] Error updating driver Firestore isAvailable: $e');
+        print('Error updating driver Firestore isAvailable: $e');
       }
     }
   }
@@ -203,10 +194,8 @@ class RideController extends ChangeNotifier {
   }
 
   // Set up a listener for a specific request to detect confirmation
-// Set up a listener for a specific request to detect confirmation
-// Set up a listener for a specific request to detect confirmation
   void _setupRequestListener(String requestId) {
-    print('[$_currentTimestamp] [$_currentUserLogin] Setting up request confirmation listener for $requestId');
+    print('Setting up request confirmation listener for $requestId');
 
     // Cancel any existing request listener to prevent duplicates
     _requestListener?.cancel();
@@ -217,7 +206,7 @@ class RideController extends ChangeNotifier {
         .snapshots()
         .listen((snapshot) {
       if (!snapshot.exists) {
-        print('[$_currentTimestamp] [$_currentUserLogin] Request document no longer exists');
+        print('Request document no longer exists');
         return;
       }
 
@@ -225,12 +214,10 @@ class RideController extends ChangeNotifier {
       final status = data['status'] as String?;
       final confirmedDriverId = data['confirmedDriverId'] as String?;
 
-      print('[$_currentTimestamp] [$_currentUserLogin] Request update: status=$status, confirmedDriverId=$confirmedDriverId');
-
       // Check if this driver is confirmed and status changed to "accepted"
       if ((status == 'accepted' || status == 'confirmed') &&
           confirmedDriverId == _auth.currentUser?.uid) {
-        print('[$_currentTimestamp] [$_currentUserLogin] ✅ Passenger confirmed this driver! Starting ride...');
+        print('✅ Passenger confirmed this driver! Starting ride...');
 
         // Instead of creating a new PassengerRequest object directly,
         // update the existing currentRide object
@@ -240,7 +227,7 @@ class RideController extends ChangeNotifier {
               captainId: confirmedDriverId
           );
 
-          // SEND WELCOME MESSAGE RIGHT HERE when the passenger confirms
+          // Send welcome message when the passenger confirms
           _sendWelcomeMessage();
 
           // Mark as en route to pickup
@@ -255,7 +242,7 @@ class RideController extends ChangeNotifier {
             // Show route to pickup location
             if (onShowRoute != null && driverLocation != null) {
               onShowRoute!(LatLng(currentRide!.pickupLat, currentRide!.pickupLng));
-              print('[$_currentTimestamp] [$_currentUserLogin] Showing route to pickup location');
+              print('Showing route to pickup location');
             }
 
             // Notify UI of the state change
@@ -265,20 +252,20 @@ class RideController extends ChangeNotifier {
       }
       // Handle cancellation
       else if (status == 'cancelled') {
-        print('[$_currentTimestamp] [$_currentUserLogin] ❌ Request was cancelled');
+        print('❌ Request was cancelled');
         _handleRideCancellation();
       }
     }, onError: (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error in request listener: $e');
+      print('Error in request listener: $e');
     });
   }
 
-// Add this helper method to send the welcome message
+  // Send welcome message to passenger
   Future<void> _sendWelcomeMessage() async {
     if (currentRide == null) return;
 
     try {
-      print('[$_currentTimestamp] [$_currentUserLogin] Sending welcome message for ride: ${currentRide!.id}');
+      print('Sending welcome message for ride: ${currentRide!.id}');
 
       // Create an instance of ChatService
       final ChatService _chatService = ChatService();
@@ -289,21 +276,22 @@ class RideController extends ChangeNotifier {
           "Hello! I'm ${driverName}, your driver for today. I'm on my way to pick you up! 🚗"
       );
 
-      print('[$_currentTimestamp] [$_currentUserLogin] Welcome message sent successfully');
+      print('Welcome message sent successfully');
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error sending welcome message: $e');
+      print('Error sending welcome message: $e');
     }
   }
+
   // Check for active ride
   Future<void> _checkActiveRide() async {
     try {
-      print('[$_currentTimestamp] [$_currentUserLogin] Getting active ride for driver ${_auth.currentUser?.uid}');
+      print('Getting active ride for driver ${_auth.currentUser?.uid}');
 
       // First check if the driver has activeRideId set in their Taxis document
       final driverDoc = await _firestore.collection('Taxis').doc(_auth.currentUser?.uid).get();
 
       if (!driverDoc.exists) {
-        print('[$_currentTimestamp] [$_currentUserLogin] Driver document not found');
+        print('Driver document not found');
         return;
       }
 
@@ -311,11 +299,9 @@ class RideController extends ChangeNotifier {
       final String? activeRideId = driverData['activeRideId'] as String?;
       final String? driverRideState = driverData['rideState'] as String?;
 
-      print('[$_currentTimestamp] [$_currentUserLogin] Driver document - activeRideId: $activeRideId, rideState: $driverRideState');
-
       // No active ride - nothing to do
       if (activeRideId == null) {
-        print('[$_currentTimestamp] [$_currentUserLogin] No active ride found in driver document');
+        print('No active ride found in driver document');
         rideState = RideState.searching;
         currentRide = null;
         notifyListeners();
@@ -327,7 +313,7 @@ class RideController extends ChangeNotifier {
 
       // Ride document doesn't exist - clean up driver state
       if (!rideDoc.exists) {
-        print('[$_currentTimestamp] [$_currentUserLogin] Active ride document not found, cleaning up driver state');
+        print('Active ride document not found, cleaning up driver state');
         // Clear the invalid active ride ID
         await _firestore.collection('Taxis').doc(_auth.currentUser?.uid).update({
           'activeRideId': null,
@@ -344,11 +330,9 @@ class RideController extends ChangeNotifier {
       final String? rideStatus = rideData['status'] as String?;
       final String? confirmedDriverId = rideData['confirmedDriverId'] as String?;
 
-      print('[$_currentTimestamp] [$_currentUserLogin] Found ride with status: $rideStatus, confirmedDriver: $confirmedDriverId');
-
       // If ride is cancelled or completed, clean up driver state
       if (rideStatus == 'cancelled' || rideStatus == 'completed') {
-        print('[$_currentTimestamp] [$_currentUserLogin] Ride found with status $rideStatus - cleaning up driver state');
+        print('Ride found with status $rideStatus - cleaning up driver state');
         await _firestore.collection('Taxis').doc(_auth.currentUser?.uid).update({
           'activeRideId': null,
           'rideState': null,
@@ -365,7 +349,7 @@ class RideController extends ChangeNotifier {
 
       // Handle when driver is waiting for confirmation
       if (driverRideState == 'waitingForConfirmation') {
-        print('[$_currentTimestamp] [$_currentUserLogin] Driver is waiting for confirmation');
+        print('Driver is waiting for confirmation');
 
         // This driver isn't confirmed yet
         if (confirmedDriverId == null || confirmedDriverId != _auth.currentUser?.uid) {
@@ -377,7 +361,7 @@ class RideController extends ChangeNotifier {
         }
         // This driver is confirmed but state hasn't been updated yet
         else if ((rideStatus == 'accepted' || rideStatus == 'confirmed')) {
-          print('[$_currentTimestamp] [$_currentUserLogin] Confirmed driver found - updating ride state');
+          print('Confirmed driver found - updating ride state');
 
           // Check if captain status already set
           final captainStatus = rideData['captainStatus'] as String?;
@@ -413,11 +397,11 @@ class RideController extends ChangeNotifier {
       }
 
       // If none of the conditions match, just reset to searching
-      print('[$_currentTimestamp] [$_currentUserLogin] No valid ride state found');
+      print('No valid ride state found');
       rideState = RideState.searching;
       notifyListeners();
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error checking active ride: $e');
+      print('Error checking active ride: $e');
       // Handle errors gracefully - reset to searching state if there's an error
       rideState = RideState.searching;
       notifyListeners();
@@ -430,8 +414,6 @@ class RideController extends ChangeNotifier {
 
     final rideStatus = currentRide!.status;
     final captainStatus = currentRide!.captainStatus;
-
-    print('[$_currentTimestamp] [$_currentUserLogin] Determining ride state - Status: $rideStatus, Captain Status: $captainStatus');
 
     // Handle cancelled status immediately
     if (rideStatus == 'cancelled') {
@@ -450,7 +432,6 @@ class RideController extends ChangeNotifier {
       // If captain status is set, use that to determine ride state
       if (captainStatus == 'arrived_at_pickup') {
         rideState = RideState.arrivedAtPickup;
-        print('[$_currentTimestamp] [$_currentUserLogin] Set state to arrivedAtPickup based on captain status');
       }
       else if (captainStatus == 'en_route_to_destination') {
         rideState = RideState.enrouteToDestination;
@@ -458,12 +439,10 @@ class RideController extends ChangeNotifier {
         // Route to destination
         if (onShowRoute != null && driverLocation != null) {
           onShowRoute!(LatLng(currentRide!.destinationLat, currentRide!.destinationLng));
-          print('[$_currentTimestamp] [$_currentUserLogin] Showing route to destination based on captain status');
         }
       }
       else if (captainStatus == 'arrived_at_destination') {
         rideState = RideState.arrivedAtDestination;
-        print('[$_currentTimestamp] [$_currentUserLogin] Set state to arrivedAtDestination based on captain status');
       }
       // Default for accepted rides with confirmed driver - en route to pickup
       else if (currentRide!.captainId == _auth.currentUser?.uid) {
@@ -472,13 +451,11 @@ class RideController extends ChangeNotifier {
         // Route to pickup
         if (onShowRoute != null && driverLocation != null) {
           onShowRoute!(LatLng(currentRide!.pickupLat, currentRide!.pickupLng));
-          print('[$_currentTimestamp] [$_currentUserLogin] Showing route to pickup location by default for accepted ride');
         }
       }
       // Still waiting for confirmation
       else {
         rideState = RideState.waitingForConfirmation;
-        print('[$_currentTimestamp] [$_currentUserLogin] Waiting for confirmation');
       }
     }
     // Handle in progress rides
@@ -487,13 +464,11 @@ class RideController extends ChangeNotifier {
 
       if (onShowRoute != null && driverLocation != null) {
         onShowRoute!(LatLng(currentRide!.destinationLat, currentRide!.destinationLng));
-        print('[$_currentTimestamp] [$_currentUserLogin] Showing route to destination for in-progress ride');
       }
     }
     // Default case
     else {
       rideState = RideState.waitingForConfirmation;
-      print('[$_currentTimestamp] [$_currentUserLogin] Waiting for confirmation - Status: $rideStatus');
     }
   }
 
@@ -504,7 +479,7 @@ class RideController extends ChangeNotifier {
     _requestListener?.cancel();  // Cancel request listener when setting up ride listener
 
     if (currentRide != null) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Setting up ride listener for ${currentRide!.id}');
+      print('Setting up ride listener for ${currentRide!.id}');
 
       _rideSubscription = _firestore
           .collection('PassengerRequests')
@@ -512,7 +487,7 @@ class RideController extends ChangeNotifier {
           .snapshots()
           .listen((snapshot) {
         if (!snapshot.exists) {
-          print('[$_currentTimestamp] [$_currentUserLogin] Ride document no longer exists');
+          print('Ride document no longer exists');
           _handleRideCancellation();
           return;
         }
@@ -521,11 +496,9 @@ class RideController extends ChangeNotifier {
         final status = data['status'] as String?;
         final captainStatus = data['captainStatus'] as String?;
 
-        print('[$_currentTimestamp] [$_currentUserLogin] Ride update - Status: $status, Captain Status: $captainStatus');
-
         // Explicitly check for cancelled status
         if (status == 'cancelled') {
-          print('[$_currentTimestamp] [$_currentUserLogin] Ride was CANCELLED - resetting driver state');
+          print('Ride was CANCELLED - resetting driver state');
           _handleRideCancellation();
           return;
         }
@@ -541,7 +514,7 @@ class RideController extends ChangeNotifier {
           _handleRideStateTransition(status, captainStatus);
         }
       }, onError: (e) {
-        print('[$_currentTimestamp] [$_currentUserLogin] Error in ride listener: $e');
+        print('Error in ride listener: $e');
       });
     }
   }
@@ -553,31 +526,10 @@ class RideController extends ChangeNotifier {
     RideState oldState = rideState;
     bool stateChanged = false;
 
-    print('[$_currentTimestamp] [$_currentUserLogin] Handling ride state transition - Status: $status, Captain Status: $captainStatus');
-
     // Reset state for cancelled rides
     if (status == 'cancelled') {
       _handleRideCancellation();
       return;
-    }
-    if (status == 'confirmed' || status == 'accepted') {
-      if (captainStatus == 'en_route_to_pickup' || captainStatus == null) {
-        // Driver should go to pickup location
-        if (rideState != RideState.enrouteToPickup) {
-          rideState = RideState.enrouteToPickup;
-          stateChanged = true;
-
-          _sendWelcomeMessage();
-
-          // Show route to pickup
-          if (onShowRoute != null && driverLocation != null) {
-            onShowRoute!(
-                LatLng(currentRide!.pickupLat, currentRide!.pickupLng));
-            print(
-                '[2025-06-05 20:43:26] [Lilydebug] En route to PICKUP location');
-          }
-        }
-      }
     }
 
     // Handle completed rides
@@ -597,7 +549,7 @@ class RideController extends ChangeNotifier {
           // Show route to pickup
           if (onShowRoute != null && driverLocation != null) {
             onShowRoute!(LatLng(currentRide!.pickupLat, currentRide!.pickupLng));
-            print('[$_currentTimestamp] [$_currentUserLogin] En route to PICKUP location');
+            print('En route to PICKUP location');
           }
         }
       }
@@ -606,7 +558,7 @@ class RideController extends ChangeNotifier {
         if (rideState != RideState.arrivedAtPickup) {
           rideState = RideState.arrivedAtPickup;
           stateChanged = true;
-          print('[$_currentTimestamp] [$_currentUserLogin] Arrived at PICKUP location');
+          print('Arrived at PICKUP location');
         }
       }
       else if (captainStatus == 'en_route_to_destination') {
@@ -618,7 +570,7 @@ class RideController extends ChangeNotifier {
           // Show route to destination
           if (onShowRoute != null && driverLocation != null) {
             onShowRoute!(LatLng(currentRide!.destinationLat, currentRide!.destinationLng));
-            print('[$_currentTimestamp] [$_currentUserLogin] En route to DESTINATION');
+            print('En route to DESTINATION');
           }
         }
       }
@@ -627,7 +579,7 @@ class RideController extends ChangeNotifier {
         if (rideState != RideState.arrivedAtDestination) {
           rideState = RideState.arrivedAtDestination;
           stateChanged = true;
-          print('[$_currentTimestamp] [$_currentUserLogin] Arrived at DESTINATION');
+          print('Arrived at DESTINATION');
         }
       }
     }
@@ -641,14 +593,14 @@ class RideController extends ChangeNotifier {
 
         if (onShowRoute != null && driverLocation != null) {
           onShowRoute!(LatLng(currentRide!.destinationLat, currentRide!.destinationLng));
-          print('[$_currentTimestamp] [$_currentUserLogin] In progress - heading to DESTINATION');
+          print('In progress - heading to DESTINATION');
         }
       }
     }
 
     // Notify UI if state changed
     if (stateChanged) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Ride state changed: $oldState -> $rideState');
+      print('Ride state changed: $oldState -> $rideState');
       notifyListeners();
     }
   }
@@ -671,8 +623,6 @@ class RideController extends ChangeNotifier {
       Map<String, dynamic> updates = {
         'isOnline': isOnline,
         'lastStatusChange': FieldValue.serverTimestamp(),
-        'currentTimestamp': _currentTimestamp,
-        'currentUserLogin': _currentUserLogin,
       };
 
       if (isOnline) {
@@ -698,7 +648,7 @@ class RideController extends ChangeNotifier {
       onShowSnackBar?.call(isOnline ? 'You are now online' : 'You are now offline');
 
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error toggling driver status: $e');
+      print('Error toggling driver status: $e');
       onShowSnackBar?.call('Error updating status.');
       isOnline = !isOnline;
     } finally {
@@ -738,14 +688,24 @@ class RideController extends ChangeNotifier {
       target.longitude,
     );
 
-    // Convert to meters and check against arrival radius
+    // Convert to meters
     double distanceMeters = distanceKm * 1000;
+
+    // Dynamic arrival radius - larger for destination to make it easier to detect arrival
+    double effectiveRadius = arrivalRadius;
+    if (rideState == RideState.enrouteToDestination) {
+      // Use a larger radius for destination arrival detection
+      effectiveRadius = 100.0; // 100 meters for destination
+    }
+
+    // Store previous state to detect changes
     bool wasArrival = canArrive;
-    canArrive = distanceMeters <= arrivalRadius;
+
+    // Update arrival status
+    canArrive = distanceMeters <= effectiveRadius;
 
     // If arrival status changed, notify
     if (wasArrival != canArrive) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Arrival status changed to $canArrive (distance: ${distanceMeters.toStringAsFixed(1)}m)');
       notifyListeners();
     }
   }
@@ -795,12 +755,10 @@ class RideController extends ChangeNotifier {
           'lng': location.longitude,
           'location': GeoPoint(location.latitude, location.longitude),
           'lastLocationUpdate': FieldValue.serverTimestamp(),
-          'currentTimestamp': _currentTimestamp,
-          'currentUserLogin': _currentUserLogin,
         });
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error updating driver location: $e');
+      print('Error updating driver location: $e');
     }
   }
 
@@ -844,7 +802,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error fetching nearby requests: $e');
+      print('Error fetching nearby requests: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error fetching requests: $e');
       }
@@ -861,7 +819,6 @@ class RideController extends ChangeNotifier {
   }
 
   // Accept a passenger request
-// Accept a passenger request
   Future<void> acceptRequest(PassengerRequest request) async {
     try {
       isLoading = true;
@@ -879,7 +836,7 @@ class RideController extends ChangeNotifier {
         currentRide = request;
         showRequestsList = false;
 
-        // ADDED THIS LINE: Ensure any preview is cleared before showing route
+        // Clear any existing route first
         onClearRoute?.call();
 
         // Show route to pickup location
@@ -896,7 +853,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error accepting request: $e');
+      print('Error accepting request: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -905,6 +862,7 @@ class RideController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   // Mark arrived at pickup
   Future<void> arrivedAtPickup() async {
     if (currentRide == null) return;
@@ -931,7 +889,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error updating pickup arrival: $e');
+      print('Error updating pickup arrival: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -940,6 +898,7 @@ class RideController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   // Confirm pickup and start ride
   Future<void> confirmPickup() async {
     if (currentRide == null) return;
@@ -954,12 +913,17 @@ class RideController extends ChangeNotifier {
       );
 
       if (success) {
+        // Clear pickup marker when passenger is picked up
+        if (onClearPickupMarker != null && currentRide != null) {
+          onClearPickupMarker!(currentRide!.id);
+        }
+
         rideState = RideState.enrouteToDestination;
 
         // Show route to destination
         if (onShowRoute != null && driverLocation != null) {
           onShowRoute!(LatLng(currentRide!.destinationLat, currentRide!.destinationLng));
-          print('[$_currentTimestamp] [$_currentUserLogin] Showing route to destination after pickup');
+          print('Showing route to destination after pickup');
         }
 
         if (onShowSnackBar != null) {
@@ -971,7 +935,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error confirming pickup: $e');
+      print('Error confirming pickup: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -1007,7 +971,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error updating destination arrival: $e');
+      print('Error updating destination arrival: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -1031,8 +995,11 @@ class RideController extends ChangeNotifier {
       );
 
       if (success) {
-        // The ride completion logic will be handled by _handleRideCompletion
-        // after the Firebase update triggers the listener
+        // Clear any remaining markers
+        if (onClearMarkers != null) {
+          onClearMarkers!();
+        }
+
         _handleRideCompletion();
       } else {
         if (onShowSnackBar != null) {
@@ -1040,7 +1007,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error completing ride: $e');
+      print('Error completing ride: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -1064,8 +1031,11 @@ class RideController extends ChangeNotifier {
       );
 
       if (success) {
-        // The cancellation logic will be handled by _handleRideCancellation
-        // after the Firebase update triggers the listener
+        // Clear all markers associated with this ride
+        if (onClearMarkers != null) {
+          onClearMarkers!();
+        }
+
         _handleRideCancellation();
       } else {
         if (onShowSnackBar != null) {
@@ -1073,7 +1043,7 @@ class RideController extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('[$_currentTimestamp] [$_currentUserLogin] Error cancelling ride: $e');
+      print('Error cancelling ride: $e');
       if (onShowSnackBar != null) {
         onShowSnackBar!('Error: $e');
       }
@@ -1088,7 +1058,7 @@ class RideController extends ChangeNotifier {
   void dispose() {
     _arrivalCheckTimer?.cancel();
     _rideSubscription?.cancel();
-    _requestListener?.cancel();  // Added this line to clean up request listener
+    _requestListener?.cancel();
     super.dispose();
   }
 }

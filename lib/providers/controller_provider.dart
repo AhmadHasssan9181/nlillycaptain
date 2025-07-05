@@ -50,10 +50,10 @@ class ControllerProvider extends ChangeNotifier {
               showSnackBar('Failed to get route.');
             }
           } catch (e) {
-            print('[2025-06-03 19:01:24] [Lilydebug] Error showing route: $e');
+            print('Error showing route: $e');
           }
         } else {
-          print("[2025-06-03 19:01:24] [Lilydebug] Map controller not ready for routing");
+          print("Map controller not ready for routing");
         }
       };
 
@@ -66,6 +66,13 @@ class ControllerProvider extends ChangeNotifier {
       rideController.onClearMarkers = () {
         if (mapController.mapController != null) {
           mapController.clearPassengerMarkers();
+        }
+      };
+
+      // Add handler for selective marker removal
+      rideController.onClearPickupMarker = (passengerId) {
+        if (mapController.mapController != null) {
+          mapController.clearPassengerMarkerById(passengerId);
         }
       };
 

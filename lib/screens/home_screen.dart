@@ -20,7 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../screens/ride_history_screen.dart';  // Add this import
 import '../screens/earnings_screen.dart';
 import '../services/location_service.dart';  // Add this import
-
+import '../widgets/debug_controls.dart';  // Add this import
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -260,10 +260,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _onMapCreated(MaplibreMapController controller) {
     _mapController.setMapController(controller);
-    if (_rideController.driverLocation != null) {
-      _mapController.moveCameraToLocation(_rideController.driverLocation!);
-    }
+
+    // Pass the map controller to the location service for debug features
+    _locationService.setMapLibreController(controller);
+
+    // Also pass your MapController instance to LocationService for direct updates
+    _locationService.setMapController(_mapController);
+
+    // We can't set onMapClick directly as it's final
+    // Instead, we'll use a GestureDetector overlay in the build method
+
   }
+
 
   void _showSnackBar(String message) {
     if (mounted) {
@@ -319,7 +327,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.dispose();
   }
 
-
   @override
   Widget build(BuildContext context) {
     // Show Profile screen if active
@@ -367,8 +374,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 myLocationEnabled: true,
               ),
 
+              // Transparent gesture detector for debug mode map taps
+              if (_locationService.isDebugModeEnabled)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTapUp: (details) {
+                      if (_mapController.mapController != null) {
+                        // Get the rendered map size
+                        Size mapSize = Size(
+                          MediaQuery.of(context).size.width,
+                          MediaQuery.of(context).size.height,
+                        );
+
+                        // Try to convert tap position to map coordinates
+                        _mapController.mapController!.getVisibleRegion().then((bounds) {
+                          if (bounds != null) {
+                            // Calculate relative position within the map
+                            double relX = details.localPosition.dx / mapSize.width;
+                            double relY = details.localPosition.dy / mapSize.height;
+
+                            // Interpolate between southwest and northeast to get approximate coordinates
+                            double lat = bounds.southwest.latitude +
+                                (bounds.northeast.latitude - bounds.southwest.latitude) * (1 - relY);
+                            double lng = bounds.southwest.longitude +
+                                (bounds.northeast.longitude - bounds.southwest.longitude) * relX;
+
+                            // Use the simulated position
+                            _locationService.simulateArrivalAt(LatLng(lat, lng));
+                          }
+                        });
+                      }
+                    },
+                    child: Container(color: Colors.transparent),
+                  ),
+                ),
+
               // Top Status Bar
               _buildTopStatusBar(),
+
+              // Debug Controls - placed after map but before other UI
+              DebugControls(
+                locationService: _locationService,
+                destinationLocation: _rideController.currentRide != null
+                    ? LatLng(
+                    _rideController.currentRide!.destinationLat,
+                    _rideController.currentRide!.destinationLng
+                )
+                    : null,
+                currentRoute: _mapController.currentRoute,
+              ),
 
               // Bottom Control Panel
               _buildBottomControlPanel(),
@@ -379,7 +434,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   !_rideController.isInRide)
                 _buildPassengerRequestsOverlay(),
 
-              // Request Preview Overlay (ADD THIS)
+              // Request Preview Overlay
               if (_showRequestPreview && _previewedRequest != null)
                 _buildRequestDestinationPreview(),
 

@@ -5,12 +5,17 @@ import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../controller/map_controller.dart';
 
 class LocationService {
   // Singleton pattern
   static final LocationService _instance = LocationService._internal();
   factory LocationService() => _instance;
   LocationService._internal();
+
+  // Debug mode
+  bool _debugModeEnabled = false;
+  Circle? _debugMarker;
 
   // Stream subscription for position updates
   StreamSubscription<Position>? _positionStreamSubscription;
@@ -37,8 +42,13 @@ class LocationService {
   bool _isTracking = false;
   bool _forceUpdates = true; // Force updates even without movement
 
+  // Map controllers
+  MaplibreMapController? _mapController;
+  MapController? _appMapController;
+
   // Getters
   bool get isTracking => _isTracking;
+  bool get isDebugModeEnabled => _debugModeEnabled;
 
   // Set whether to force updates even without movement
   void setForceUpdates(bool force) {
@@ -47,6 +57,156 @@ class LocationService {
       stopTracking();
       startTracking();
     }
+  }
+
+  // Toggle debug mode
+  void setDebugMode(bool enabled) {
+    _debugModeEnabled = enabled;
+
+    if (!_debugModeEnabled && _debugMarker != null) {
+      _mapController?.removeCircle(_debugMarker!);
+      _debugMarker = null;
+    } else if (_debugModeEnabled && _lastKnownPosition != null) {
+      _addDebugMarker(LatLng(_lastKnownPosition!.latitude, _lastKnownPosition!.longitude));
+    }
+  }
+
+  // Set the MapController from our app architecture - THIS IS THE KEY FIX
+  void setMapController(MapController controller) {
+    _appMapController = controller;
+  }
+
+  // Set the MapLibre controller
+  void setMapLibreController(MaplibreMapController controller) {
+    _mapController = controller;
+
+    if (_debugModeEnabled) {
+      // Add debug marker if in debug mode
+      if (_lastKnownPosition != null) {
+        _addDebugMarker(LatLng(_lastKnownPosition!.latitude, _lastKnownPosition!.longitude));
+      } else {
+        // If no location yet, use a default position
+        _addDebugMarker(LatLng(24.860966, 67.001137)); // Default position (Karachi)
+      }
+    }
+  }
+
+  // Add debug marker
+  void _addDebugMarker(LatLng position) {
+    if (_mapController == null) return;
+
+    // Remove existing debug marker if any
+    if (_debugMarker != null) {
+      _mapController!.removeCircle(_debugMarker!);
+      _debugMarker = null;
+    }
+
+    // Add a new marker
+    _mapController!.addCircle(
+      CircleOptions(
+        geometry: position,
+        circleRadius: 15,
+        circleColor: "#FFAA00", // Orange color for debug marker
+        circleOpacity: 0.8,
+        circleStrokeWidth: 3,
+        circleStrokeColor: "#FF5500",
+      ),
+    ).then((circle) {
+      _debugMarker = circle;
+      _simulateLocationUpdate(position);
+    });
+  }
+
+  // Move debug marker to a new position
+  void _moveDebugMarker(LatLng position) {
+    if (_mapController == null || _debugMarker == null) return;
+
+    _mapController!.updateCircle(
+        _debugMarker!,
+        CircleOptions(geometry: position)
+    );
+
+    _simulateLocationUpdate(position);
+  }
+
+  // Simulate location update from debug marker - KEY FIX IS HERE
+  void _simulateLocationUpdate(LatLng position) {
+    if (!_debugModeEnabled) return;
+
+    try {
+      // Notify listeners with the new location
+      if (onLocationChanged != null) {
+        onLocationChanged!(position);
+      }
+
+      // IMPORTANT: Directly update MapController to ensure route updates
+      if (_appMapController != null) {
+        _appMapController!.updateDriverLocation(position);
+      }
+
+      // Update Firestore
+      _updateFirestoreDirectly(position);
+    } catch (e) {
+      print("Error simulating location: $e");
+    }
+  }
+
+  // Simulate arrival at destination
+  void simulateArrivalAt(LatLng targetLocation) {
+    if (!_debugModeEnabled) return;
+
+    // Create a slightly offset position (within 50m of target)
+    Random random = Random();
+    double offsetLat = (random.nextDouble() - 0.5) * 0.0008; // ~50m in latitude
+    double offsetLng = (random.nextDouble() - 0.5) * 0.0008; // ~50m in longitude
+
+    // Create position near target
+    LatLng simulatedPosition = LatLng(
+        targetLocation.latitude + offsetLat,
+        targetLocation.longitude + offsetLng
+    );
+
+    // Move the debug marker if it exists
+    if (_debugMarker != null && _mapController != null) {
+      _mapController!.updateCircle(
+          _debugMarker!,
+          CircleOptions(geometry: simulatedPosition)
+      );
+    } else {
+      _addDebugMarker(simulatedPosition);
+    }
+
+    // Simulate the location update
+    _simulateLocationUpdate(simulatedPosition);
+  }
+
+  // Simulate driving along a route
+  void simulateRouteProgress(List<LatLng> route, int stepSize) {
+    if (!_debugModeEnabled || route.isEmpty) return;
+
+    int currentIndex = 0;
+    Timer.periodic(Duration(seconds: 2), (timer) {
+      if (currentIndex >= route.length) {
+        timer.cancel();
+        return;
+      }
+
+      // Move the debug marker to this point in the route
+      if (_debugMarker != null && _mapController != null) {
+        _mapController!.updateCircle(
+            _debugMarker!,
+            CircleOptions(geometry: route[currentIndex])
+        );
+      } else {
+        _addDebugMarker(route[currentIndex]);
+      }
+
+      // Simulate location update
+      _simulateLocationUpdate(route[currentIndex]);
+
+      // Increment by stepSize to skip some points for faster simulation
+      currentIndex += stepSize;
+    });
   }
 
   // Configure update intervals
@@ -73,7 +233,6 @@ class LocationService {
     if (_isInRide == isInRide) return;
 
     _isInRide = isInRide;
-    print('Location service: Setting ride mode to ${isInRide ? "ACTIVE RIDE" : "NORMAL"}');
 
     // Restart tracking with new interval if already tracking
     if (_isTracking) {
@@ -90,7 +249,6 @@ class LocationService {
     // Test if location services are enabled
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      print('Location services are disabled');
       return false;
     }
 
@@ -98,13 +256,11 @@ class LocationService {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        print('Location permissions are denied');
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      print('Location permissions are permanently denied');
       return false;
     }
 
@@ -113,6 +269,14 @@ class LocationService {
 
   // Get current location once
   Future<LatLng?> getCurrentLocation() async {
+    if (_debugModeEnabled && _debugMarker != null && _mapController != null) {
+      // In debug mode, return the position of the debug marker
+      final geometry = _debugMarker!.options.geometry;
+      if (geometry != null) {
+        return geometry;
+      }
+    }
+
     try {
       final position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high
@@ -120,14 +284,30 @@ class LocationService {
       _lastKnownPosition = position;
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
-      print('Error getting current location: $e');
       return null;
     }
   }
 
-  // Start tracking location continuously
+  // Start tracking location continuously - KEY FIX IS HERE TOO
   Future<bool> startTracking() async {
     if (_isTracking) return true;
+
+    // If in debug mode, use the current debug marker position
+    if (_debugModeEnabled && _debugMarker != null) {
+      final geometry = _debugMarker!.options.geometry;
+      if (geometry != null) {
+        onLocationChanged?.call(geometry);
+
+        // IMPORTANT: Directly update MapController
+        if (_appMapController != null) {
+          _appMapController!.updateDriverLocation(geometry);
+        }
+
+        _updateFirestoreDirectly(geometry);
+        _isTracking = true;
+        return true;
+      }
+    }
 
     final hasPermission = await requestPermissions();
     if (!hasPermission) return false;
@@ -136,12 +316,22 @@ class LocationService {
     final initialPosition = await getCurrentLocation();
     if (initialPosition != null) {
       onLocationChanged?.call(initialPosition);
+
+      // IMPORTANT: Directly update MapController
+      if (_appMapController != null) {
+        _appMapController!.updateDriverLocation(initialPosition);
+      }
+
       _updateFirestoreDirectly(initialPosition);
     }
 
-    try {
-      print('Starting location tracking with ${_isInRide ? "ride" : "normal"} mode');
+    // Don't start real tracking if in debug mode
+    if (_debugModeEnabled) {
+      _isTracking = true;
+      return true;
+    }
 
+    try {
       // For geolocator 14.0.0, use the correct parameters
       final LocationSettings locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
@@ -158,28 +348,31 @@ class LocationService {
       _positionStreamSubscription = Geolocator.getPositionStream(
           locationSettings: locationSettings
       ).listen((Position position) {
+        if (_debugModeEnabled) return; // Skip real updates if in debug mode
+
         _lastKnownPosition = position;
         final driverLocation = LatLng(position.latitude, position.longitude);
-
-        print('LOCATION UPDATE: ${position.latitude}, ${position.longitude}');
 
         // Notify listeners
         onLocationChanged?.call(driverLocation);
 
-        // Also update Firestore directly to ensure it happens
+        // IMPORTANT: Directly update MapController
+        if (_appMapController != null) {
+          _appMapController!.updateDriverLocation(driverLocation);
+        }
+
+        // Update Firestore
         _updateFirestoreDirectly(driverLocation);
       });
 
       // Set up forced update timer if enabled
-      if (_forceUpdates) {
+      if (_forceUpdates && !_debugModeEnabled) {
         _setupForcedUpdateTimer();
       }
 
       _isTracking = true;
-      print('Location tracking started in ${_isInRide ? "RIDE" : "NORMAL"} mode');
       return true;
     } catch (e) {
-      print('Error starting location tracking: $e');
       return false;
     }
   }
@@ -191,17 +384,20 @@ class LocationService {
     final updateInterval = _isInRide ? _rideInterval : _normalInterval;
 
     _forcedUpdateTimer = Timer.periodic(Duration(milliseconds: updateInterval * 2), (_) {
-      if (_lastKnownPosition != null) {
+      if (_lastKnownPosition != null && !_debugModeEnabled) {
         // Add tiny random variation to ensure updates are registered
         final jitteredLocation = LatLng(
             _lastKnownPosition!.latitude + (_random.nextDouble() - 0.5) * 0.00001,
             _lastKnownPosition!.longitude + (_random.nextDouble() - 0.5) * 0.00001
         );
 
-        print('FORCED LOCATION UPDATE: ${jitteredLocation.latitude}, ${jitteredLocation.longitude}');
-
         // Notify listeners of jittered location
         onLocationChanged?.call(jitteredLocation);
+
+        // IMPORTANT: Directly update MapController
+        if (_appMapController != null) {
+          _appMapController!.updateDriverLocation(jitteredLocation);
+        }
 
         // Update Firestore directly
         _updateFirestoreDirectly(jitteredLocation);
@@ -220,12 +416,10 @@ class LocationService {
           'lng': location.longitude,
           'location': GeoPoint(location.latitude, location.longitude),
           'lastLocationUpdate': FieldValue.serverTimestamp(),
-          'forceUpdatedAt': DateTime.now().toIso8601String(), // Add this to track forced updates
         });
-        print('Firebase location updated directly: ${location.latitude}, ${location.longitude}');
       }
     } catch (e) {
-      print('Error updating Firestore directly: $e');
+      // Silently handle errors
     }
   }
 
@@ -238,11 +432,16 @@ class LocationService {
     _forcedUpdateTimer = null;
 
     _isTracking = false;
-    print('Location tracking stopped');
   }
 
   // Cleanup resources
   void dispose() {
     stopTracking();
+    if (_debugMarker != null && _mapController != null) {
+      _mapController!.removeCircle(_debugMarker!);
+      _debugMarker = null;
+    }
+    _appMapController = null;
+    _mapController = null;
   }
 }
