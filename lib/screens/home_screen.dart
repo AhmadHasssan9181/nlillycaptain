@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:lilycaptain/passenger_model.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +11,8 @@ import 'package:go_router/go_router.dart';
 // Local imports
 import '../controller/map_controller.dart';
 import '../controller/ride_controller.dart';
+import '../location_manager.dart';
+import '../main.dart';
 import '../services/permission_service.dart';
 import '../widgets/app_drawer.dart';
 import '../screens/profile_screen.dart';
@@ -35,6 +39,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   // Controllers
   late final MapController _mapController;
   late final RideController _rideController;
+
 
   // Track initialization to prevent multiple initializations
   bool _controllersInitialized = false;
@@ -66,16 +71,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!_isLocationServiceInitialized) {
       _locationService = LocationService();
 
+      // Get the LocationBridge from provider
+      final locationBridge = ref.read(locationBridgeProvider);
+
+      // Register MapController directly with LocationBridge if it's already initialized
+      if (_controllersInitialized) {
+        locationBridge.registerMapController(_mapController);
+        locationBridge.registerRideController(_rideController);
+      }
+
       // Configure update frequency
       _locationService.configure(
         normalIntervalMs: 10000,  // 10 seconds when not in ride
         rideIntervalMs: 3000,     // 3 seconds during active ride
       );
 
-      // Set callback for location updates
+      // Set callback for location updates (can be removed if using LocationBridge exclusively)
       _locationService.onLocationChanged = (LatLng location) {
-        // Use your existing method to update controllers
-        _updateLocationInBothControllers(location);
+        // This callback is optional now as LocationBridge handles distribution
+        print("📱 Location update received: (${location.latitude}, ${location.longitude})");
       };
 
       // Start tracking
@@ -141,10 +155,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _mapController = MapController();
       _rideController = RideController();
 
+      // Register controllers with LocationBridge
+      final locationBridge = ref.read(locationBridgeProvider);
+      locationBridge.registerMapController(_mapController);
+      locationBridge.registerRideController(_rideController);
+
       // Set up callbacks with safety checks
       _rideController.onShowSnackBar = _showSnackBar;
 
-      // Only RideController manages location updates to prevent loops
       _rideController.onShowRoute = (destination) async {
         if (_mapController.mapController != null) {
           final success = await _mapController.showRouteToLocation(destination);
@@ -152,7 +170,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             _showSnackBar('Failed to get route.');
           }
         } else {
-          print("[2025-06-03 18:53:11] [Lilydebug] Map controller not ready for routing");
+          print("Map controller not ready for routing");
         }
       };
 
@@ -261,17 +279,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void _onMapCreated(MaplibreMapController controller) {
     _mapController.setMapController(controller);
 
+    // Register the MapController with LocationBridge
+    final locationBridge = ref.read(locationBridgeProvider);
+    locationBridge.registerMapController(_mapController);
+
     // Pass the map controller to the location service for debug features
     _locationService.setMapLibreController(controller);
 
-    // Also pass your MapController instance to LocationService for direct updates
+    // This line can stay for backward compatibility
     _locationService.setMapController(_mapController);
 
-    // We can't set onMapClick directly as it's final
-    // Instead, we'll use a GestureDetector overlay in the build method
+    if (_rideController.driverLocation != null) {
+      _mapController.moveCameraToLocation(_rideController.driverLocation!);
+    }
 
+    print("🗺️ Map initialized and controllers registered with LocationBridge");
   }
-
 
   void _showSnackBar(String message) {
     if (mounted) {
@@ -424,6 +447,75 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     : null,
                 currentRoute: _mapController.currentRoute,
               ),
+
+              // Recalculate button - center right
+              if (_rideController.isInRide)
+                Positioned(
+                  right: 16,
+                  top: MediaQuery.of(context).size.height / 2 - 28, // Centered vertically
+                  child: FloatingActionButton(
+                    onPressed: () {
+                      if (_mapController.mapController != null) {
+                        // Get actual blue dot position
+                        _mapController.mapController!.requestMyLocationLatLng().then((location) {
+                          if (location != null) {
+                            print("Got ACTUAL blue dot position: (${location.latitude}, ${location.longitude})");
+
+                            // Clear existing route first
+                            _mapController.clearRoute();
+
+                            // Force update the driver location with this location
+                            _mapController.updateDriverLocation(location);
+
+                            // Get destination from ride controller
+                            if (_rideController.currentRide != null) {
+                              final destination = LatLng(
+                                  _rideController.currentRide!.destinationLat,
+                                  _rideController.currentRide!.destinationLng
+                              );
+
+                              // Add a small delay to ensure location update is processed
+                              Future.delayed(Duration(milliseconds: 200), () {
+                                // Now calculate a fresh route
+                                _mapController.showRouteToLocation(destination);
+                              });
+                            }
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Recalculating route from current position'),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          } else {
+                            // Fallback if location not available
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Cannot get current position'),
+                                backgroundColor: Colors.red,
+                                duration: Duration(seconds: 3),
+                              ),
+                            );
+                          }
+                        });
+                      } else {
+                        // Fallback if map controller isn't initialized
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Cannot recalculate: Map not ready'),
+                            backgroundColor: Colors.red,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    },
+                    backgroundColor: Color(0xFFFF4B6C),
+                    elevation: 4,
+                    heroTag: "recalculateRoute",
+                    tooltip: "Recalculate route",
+                    child: Icon(Icons.refresh, color: Colors.white),
+                  ),
+                ),
 
               // Bottom Control Panel
               _buildBottomControlPanel(),
@@ -1254,7 +1346,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
         // Action Buttons based on ride state - INCLUDING WAITING FOR CONFIRMATION
 
-         if (_rideController.rideState == RideState.enrouteToPickup)
+        if (_rideController.rideState == RideState.enrouteToPickup)
           Row(
             children: [
               Expanded(
@@ -1348,70 +1440,70 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ],
           )
-           else  if (_rideController.rideState == RideState.waitingForConfirmation)
-           Row(
-             children: [
-               Expanded(
-                 child: SizedBox(
-                   height: 44,
-                   child: ElevatedButton.icon(
-                     onPressed: _rideController.cancelRide,
-                     icon: Icon(Icons.cancel_outlined, size: 18),
-                     label: Text(
-                       'Cancel',
-                       style: TextStyle(
-                         color: Colors.white70,
-                         fontSize: 12,
-                         fontWeight: FontWeight.w600,
-                       ),
-                     ),
-                     style: ElevatedButton.styleFrom(
-                       backgroundColor: Colors.grey[800],
-                       shape: RoundedRectangleBorder(
-                         borderRadius: BorderRadius.circular(10),
-                       ),
-                     ),
-                   ),
-                 ),
-               ),
-               SizedBox(width: 8),
-               Expanded(
-                 child: SizedBox(
-                   height: 44,
-                   child: ElevatedButton.icon(
-                     onPressed: () {
-                       if (_rideController.currentRide != null) {
-                         context.pushNamed(
-                           'chat',
-                           pathParameters: {'rideId': _rideController.currentRide!.id},
-                           queryParameters: {
-                             'name': _rideController.currentRide!.passengerName,
-                             'image': _rideController.currentRide!.passengerImage,
-                           },
-                         );
-                         print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
-                       }
-                     },
-                     icon: Icon(Icons.chat_bubble_outline, size: 18),
-                     label: Text(
-                       'Chat',
-                       style: TextStyle(
-                         color: Colors.white,
-                         fontSize: 12,
-                         fontWeight: FontWeight.w600,
-                       ),
-                     ),
-                     style: ElevatedButton.styleFrom(
-                       backgroundColor: Color(0xFF2A2A2A),
-                       shape: RoundedRectangleBorder(
-                         borderRadius: BorderRadius.circular(10),
-                       ),
-                     ),
-                   ),
-                 ),
-               ),
-             ],
-           )
+        else  if (_rideController.rideState == RideState.waitingForConfirmation)
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: ElevatedButton.icon(
+                    onPressed: _rideController.cancelRide,
+                    icon: Icon(Icons.cancel_outlined, size: 18),
+                    label: Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[800],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      if (_rideController.currentRide != null) {
+                        context.pushNamed(
+                          'chat',
+                          pathParameters: {'rideId': _rideController.currentRide!.id},
+                          queryParameters: {
+                            'name': _rideController.currentRide!.passengerName,
+                            'image': _rideController.currentRide!.passengerImage,
+                          },
+                        );
+                        print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                      }
+                    },
+                    icon: Icon(Icons.chat_bubble_outline, size: 18),
+                    label: Text(
+                      'Chat',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF2A2A2A),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
         else if (_rideController.rideState == RideState.arrivedAtPickup)
             Row(
               children: [

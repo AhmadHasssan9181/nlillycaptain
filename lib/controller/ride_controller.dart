@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../location_bridge.dart';
 import '../passenger_model.dart';
 import '../passenger_service.dart';
 import '../screens/chat_screen.dart';
@@ -30,6 +31,7 @@ class RideController extends ChangeNotifier {
   String driverImage = "https://randomuser.me/api/portraits/men/32.jpg";
   bool isOnline = false;
   LatLng? driverLocation;
+  LatLng? _previousDriverLocation;
   double totalEarningsToday = 0.0;
   int ridesCompleted = 0;
   double rating = 4.5;
@@ -59,6 +61,9 @@ class RideController extends ChangeNotifier {
   Function()? onClearMarkers;
   Function(String)? onClearPickupMarker; // Clears specific marker by ID
 
+  // Add getter for previousDriverLocation
+  LatLng? get previousDriverLocation => _previousDriverLocation;
+
   // Computed property
   bool get isInRide =>
       currentRide != null &&
@@ -76,6 +81,55 @@ class RideController extends ChangeNotifier {
 
     _startArrivalCheckTimer();
     notifyListeners();
+  }
+
+  // Updated - Fixed implementation for updateDriverLocation
+  void updateDriverLocation(LatLng location) {
+    // Skip invalid locations
+    if (location.latitude == 0 && location.longitude == 0) {
+      print("Ignoring invalid location (0,0)");
+      return;
+    }
+
+    // Store previous location before updating
+    _previousDriverLocation = driverLocation;
+    driverLocation = location;
+
+    // Update in Firestore if online
+    if (isOnline) {
+      _updateDriverLocationInFirestore(location);
+    }
+
+    // Check arrival status if in a ride
+    if (isInRide) {
+      _checkArrival();
+    }
+
+    notifyListeners();
+  }
+
+  // Updated - Fixed implementation for markAsArrived
+  void markAsArrived() {
+    if (currentRide == null) return;
+
+    try {
+      // Handle different ride states
+      if (rideState == RideState.enrouteToPickup) {
+        // Mark as arrived at pickup
+        arrivedAtPickup();
+      }
+      else if (rideState == RideState.enrouteToDestination) {
+        // Mark as arrived at destination
+        arrivedAtDestination();
+      }
+      else if (rideState == RideState.arrivedAtDestination) {
+        // Complete the ride if we're already at destination
+        completeRide();
+      }
+    } catch (e) {
+      print('Error marking ride as arrived: $e');
+      onShowSnackBar?.call('Error updating arrival status');
+    }
   }
 
   // Load driver profile data from Firestore
@@ -1056,9 +1110,16 @@ class RideController extends ChangeNotifier {
   // Dispose method
   @override
   void dispose() {
-    _arrivalCheckTimer?.cancel();
-    _rideSubscription?.cancel();
-    _requestListener?.cancel();
-    super.dispose();
+    @override
+    void dispose() {
+      _arrivalCheckTimer?.cancel();
+      _rideSubscription?.cancel();
+      _requestListener?.cancel();
+
+      // Unregister from LocationBridge
+      LocationBridge().unregisterRideController(this);
+
+      super.dispose();
+    }
   }
 }

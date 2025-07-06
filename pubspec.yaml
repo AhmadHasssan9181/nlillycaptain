@@ -32,7 +32,7 @@ dependencies:
   flutter:
     sdk: flutter
   geolocator: ^14.0.0  # Updated version
-  permission_handler: ^12.0.0+1  # Updated version
+  permission_handler: ^12.0.1  # Updated version
   flutter_riverpod: ^2.3.6
   go_router: ^15.1.2
   provider: ^6.1.3

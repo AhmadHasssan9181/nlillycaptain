@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../controller/map_controller.dart';
+import '../location_bridge.dart';
+import '../location_manager.dart';
 
 class LocationService {
   // Singleton pattern
@@ -13,7 +17,8 @@ class LocationService {
   factory LocationService() => _instance;
   LocationService._internal();
 
-  // Debug mode
+  // Properties
+  LocationManager? _locationManager;
   bool _debugModeEnabled = false;
   Circle? _debugMarker;
 
@@ -32,7 +37,7 @@ class LocationService {
 
   // Last known position and random jitter for forced updates
   Position? _lastKnownPosition;
-  Random _random = Random();
+  final Random _random = Random();
 
   // Callbacks
   Function(LatLng)? onLocationChanged;
@@ -49,6 +54,16 @@ class LocationService {
   // Getters
   bool get isTracking => _isTracking;
   bool get isDebugModeEnabled => _debugModeEnabled;
+
+  void setLocationManager(LocationManager manager) {
+    _locationManager = manager;
+    print("🔄 LocationManager set in LocationService");
+
+    // Register existing map controller if available
+    if (_appMapController != null) {
+      _locationManager!.registerMapController(_appMapController!);
+    }
+  }
 
   // Set whether to force updates even without movement
   void setForceUpdates(bool force) {
@@ -71,7 +86,7 @@ class LocationService {
     }
   }
 
-  // Set the MapController from our app architecture - THIS IS THE KEY FIX
+  // Set the MapController from our app architecture
   void setMapController(MapController controller) {
     _appMapController = controller;
   }
@@ -129,7 +144,6 @@ class LocationService {
     _simulateLocationUpdate(position);
   }
 
-  // Simulate location update from debug marker - KEY FIX IS HERE
   void _simulateLocationUpdate(LatLng position) {
     if (!_debugModeEnabled) return;
 
@@ -139,10 +153,9 @@ class LocationService {
         onLocationChanged!(position);
       }
 
-      // IMPORTANT: Directly update MapController to ensure route updates
-      if (_appMapController != null) {
-        _appMapController!.updateDriverLocation(position);
-      }
+      // Use the central LocationBridge to distribute location updates
+      LocationBridge().updateLocation(position);
+      print("📍 Debug location sent through LocationBridge");
 
       // Update Firestore
       _updateFirestoreDirectly(position);
@@ -241,7 +254,7 @@ class LocationService {
     }
   }
 
-  // Request location permissions
+// Update the requestPermissions method in LocationService
   Future<bool> requestPermissions() async {
     bool serviceEnabled;
     LocationPermission permission;
@@ -249,18 +262,36 @@ class LocationService {
     // Test if location services are enabled
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
+      // Consider adding a dialog to prompt the user to enable location services
+      print("Location services are disabled");
       return false;
     }
 
+    // Check Android permissions specifically
+    if (Platform.isAndroid) {
+      // Check if we have the required permissions for foreground service
+      final status = await Permission.notification.status;
+      if (!status.isGranted) {
+        // Request notification permission for foreground service
+        final result = await Permission.notification.request();
+        if (!result.isGranted) {
+          print("Notification permission denied, foreground service might not work properly");
+        }
+      }
+    }
+
+    // Check for location permission
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
+        print("Location permissions denied");
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
+      print("Location permissions permanently denied");
       return false;
     }
 
@@ -288,7 +319,7 @@ class LocationService {
     }
   }
 
-  // Start tracking location continuously - KEY FIX IS HERE TOO
+// Update the startTracking method in LocationService
   Future<bool> startTracking() async {
     if (_isTracking) return true;
 
@@ -296,12 +327,12 @@ class LocationService {
     if (_debugModeEnabled && _debugMarker != null) {
       final geometry = _debugMarker!.options.geometry;
       if (geometry != null) {
-        onLocationChanged?.call(geometry);
-
-        // IMPORTANT: Directly update MapController
-        if (_appMapController != null) {
-          _appMapController!.updateDriverLocation(geometry);
+        if (onLocationChanged != null) {
+          onLocationChanged!(geometry);
         }
+
+        // Use LocationBridge to distribute updates
+        LocationBridge().updateLocation(geometry);
 
         _updateFirestoreDirectly(geometry);
         _isTracking = true;
@@ -315,12 +346,12 @@ class LocationService {
     // Get initial position
     final initialPosition = await getCurrentLocation();
     if (initialPosition != null) {
-      onLocationChanged?.call(initialPosition);
-
-      // IMPORTANT: Directly update MapController
-      if (_appMapController != null) {
-        _appMapController!.updateDriverLocation(initialPosition);
+      if (onLocationChanged != null) {
+        onLocationChanged!(initialPosition);
       }
+
+      // Use LocationBridge to distribute updates
+      LocationBridge().updateLocation(initialPosition);
 
       _updateFirestoreDirectly(initialPosition);
     }
@@ -332,38 +363,73 @@ class LocationService {
     }
 
     try {
-      // For geolocator 14.0.0, use the correct parameters
-      final LocationSettings locationSettings = AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: _distanceFilter, // Set to 0 to get all updates
-        intervalDuration: Duration(milliseconds: _isInRide ? _rideInterval : _normalInterval),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText: "Lily Captain is tracking your location",
-          notificationTitle: "Location Tracking Active",
-          enableWakeLock: true,
-        ),
-      );
+      // Use locationSettings appropriate for the platform
+      LocationSettings locationSettings;
 
-      // Start listening to position updates
+      if (Platform.isAndroid) {
+        locationSettings = AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: _distanceFilter,
+          intervalDuration: Duration(milliseconds: _isInRide ? _rideInterval : _normalInterval),
+          // Set foreground notification details - required for Android
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationText: "Lily Captain is using your location",
+            notificationTitle: "Location Access",
+            enableWakeLock: true,
+            notificationChannelName: "Location tracking",
+            notificationIcon: AndroidResource(name: 'ic_notification'),
+          ),
+        );
+      } else if (Platform.isIOS) {
+        locationSettings = AppleSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: _distanceFilter,
+          pauseLocationUpdatesAutomatically: false,
+          activityType: ActivityType.automotiveNavigation,
+          allowBackgroundLocationUpdates: true,
+        );
+      } else {
+        locationSettings = LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: _distanceFilter,
+        );
+      }
+
+      // Start listening to position updates with proper error handling
       _positionStreamSubscription = Geolocator.getPositionStream(
           locationSettings: locationSettings
-      ).listen((Position position) {
-        if (_debugModeEnabled) return; // Skip real updates if in debug mode
+      ).listen(
+            (Position position) {
+          // Process position updates
+          _lastKnownPosition = position;
+          final driverLocation = LatLng(position.latitude, position.longitude);
 
-        _lastKnownPosition = position;
-        final driverLocation = LatLng(position.latitude, position.longitude);
+          // Notify listeners
+          if (onLocationChanged != null) {
+            onLocationChanged!(driverLocation);
+          }
 
-        // Notify listeners
-        onLocationChanged?.call(driverLocation);
+          // Use LocationBridge to distribute updates
+          LocationBridge().updateLocation(driverLocation);
 
-        // IMPORTANT: Directly update MapController
-        if (_appMapController != null) {
-          _appMapController!.updateDriverLocation(driverLocation);
-        }
+          // Update Firestore
+          _updateFirestoreDirectly(driverLocation);
+        },
+        onError: (error) {
+          print("Location stream error: $error");
 
-        // Update Firestore
-        _updateFirestoreDirectly(driverLocation);
-      });
+          // Attempt to restart tracking after a delay if we encounter an error
+          if (_isTracking) {
+            Future.delayed(Duration(seconds: 5), () {
+              if (_isTracking) {
+                print("Attempting to restart location tracking after error");
+                stopTracking();
+                startTracking();
+              }
+            });
+          }
+        },
+      );
 
       // Set up forced update timer if enabled
       if (_forceUpdates && !_debugModeEnabled) {
@@ -373,6 +439,7 @@ class LocationService {
       _isTracking = true;
       return true;
     } catch (e) {
+      print("Error starting location tracking: $e");
       return false;
     }
   }
@@ -392,12 +459,12 @@ class LocationService {
         );
 
         // Notify listeners of jittered location
-        onLocationChanged?.call(jitteredLocation);
-
-        // IMPORTANT: Directly update MapController
-        if (_appMapController != null) {
-          _appMapController!.updateDriverLocation(jitteredLocation);
+        if (onLocationChanged != null) {
+          onLocationChanged!(jitteredLocation);
         }
+
+        // Use LocationBridge to distribute updates
+        LocationBridge().updateLocation(jitteredLocation);
 
         // Update Firestore directly
         _updateFirestoreDirectly(jitteredLocation);

@@ -1,4 +1,3 @@
-// lib/main.dart - Modified for Captain (Driver) app
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,8 +6,20 @@ import 'package:lilycaptain/providers/emergency_sos_provider.dart';
 import 'package:lilycaptain/widgets/sos_overlay.dart';
 import 'package:lilycaptain/services/permission_service.dart';
 import 'firebase_options.dart';
+import 'location_bridge.dart';
 import 'router/app_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
+// Create a provider for LocationBridge
+final locationBridgeProvider = Provider<LocationBridge>((ref) {
+  final bridge = LocationBridge();
+  // Enable debug mode for LocationBridge in debug builds
+  if (kDebugMode) {
+    bridge.setDebugMode(true);
+  }
+  return bridge;
+});
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +62,9 @@ class _MyAppState extends ConsumerState<MyApp> {
     // Initialize the SOS service when the app starts
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(emergencySosProvider.notifier).initialize();
+
+      // Initialize location bridge instead of manager
+      ref.read(locationBridgeProvider);
     });
   }
 
@@ -99,6 +113,3 @@ class SosTestButton extends ConsumerWidget {
     );
   }
 }
-
-
-
