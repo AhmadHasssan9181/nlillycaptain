@@ -25,7 +25,6 @@ class LocationManager {
   void registerMapController(MapController controller) {
     if (!_mapControllers.contains(controller)) {
       _mapControllers.add(controller);
-      print("📱 MapController registered with LocationManager");
 
       // If we already have a location, update the controller immediately
       if (_verifiedLocation != null) {
@@ -38,11 +37,8 @@ class LocationManager {
   void initialize() {
     if (_isInitialized) return;
     _isInitialized = true;
-    print("🚀 LocationManager initialized");
   }
 
-
-// For LocationManager class
   void handleLocationUpdate(LatLng location) {
     // Store as verified location
     _verifiedLocation = location;
@@ -51,23 +47,17 @@ class LocationManager {
     // Broadcast to all registered controllers
     for (var controller in _mapControllers) {
       controller.updateDriverLocation(location);
-
-      // Check if controller has an active route and force update
-
     }
 
     // Broadcast to stream listeners
     if (!_locationStreamController.isClosed) {
       _locationStreamController.add(location);
     }
-
-    print("Location broadcast to ${_mapControllers.length} controllers: (${location.latitude}, ${location.longitude})");
   }
 
   // Force a location update to all controllers
   void forceLocationUpdate() {
     if (_verifiedLocation != null) {
-      print("🔄 Forcing location update to all controllers");
       for (var controller in _mapControllers) {
         controller.updateDriverLocation(_verifiedLocation!);
       }
@@ -84,7 +74,5 @@ class LocationManager {
     _locationStreamController.close();
     _mapControllers.clear();
     _isInitialized = false;
-    print("🗑️ LocationManager disposed");
   }
 }
-

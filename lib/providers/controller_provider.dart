@@ -7,11 +7,6 @@ import '../controller/ride_controller.dart';
 class ControllerProvider extends ChangeNotifier {
   static final ControllerProvider _instance = ControllerProvider._internal();
 
-  // Factory constructor to return the singleton instance
-  factory ControllerProvider() {
-    return _instance;
-  }
-
   ControllerProvider._internal();
 
   // Controllers
@@ -36,12 +31,22 @@ class ControllerProvider extends ChangeNotifier {
 
   bool get isInitialized => _isInitialized;
 
+  // Factory constructor to return the singleton instance
+  factory ControllerProvider() {
+    return _instance;
+  }
+
   // Initialize controllers and set up callbacks
   void initialize(Function(String) showSnackBar) {
     if (!_isInitialized) {
       // Set up callbacks
       rideController.onShowSnackBar = showSnackBar;
 
+      rideController.onClearPreview = () {
+        if (mapController.mapController != null) {
+          mapController.clearDestinationPreview();
+        }
+      };
       rideController.onShowRoute = (destination) async {
         if (mapController.mapController != null) {
           try {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:lilycaptain/passenger_model.dart';
@@ -11,6 +12,7 @@ import 'package:go_router/go_router.dart';
 // Local imports
 import '../controller/map_controller.dart';
 import '../controller/ride_controller.dart';
+import '../location_bridge.dart';
 import '../location_manager.dart';
 import '../main.dart';
 import '../services/permission_service.dart';
@@ -23,8 +25,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../screens/ride_history_screen.dart';  // Add this import
 import '../screens/earnings_screen.dart';
-import '../services/location_service.dart';  // Add this import
-import '../widgets/debug_controls.dart';  // Add this import
+import '../services/location_service.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -36,22 +37,19 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Controllers
   late final MapController _mapController;
   late final RideController _rideController;
+  Timer? _locationSyncTimer;
 
-
-  // Track initialization to prevent multiple initializations
+  bool _isBottomPanelMinimized = false;
   bool _controllersInitialized = false;
 
-  bool _showRideHistoryScreen = false;  // Add this
+  bool _showRideHistoryScreen = false;
   bool _showEarningsScreen = false;
-  // Add this with your other variables
-  late LocationService _locationService;
+  LocationService _locationService = LocationService();
   bool _isLocationServiceInitialized = false;
 
 
-  // UI State
   String _locationName = "Loading location...";
   bool _isLoadingAddress = false;
   bool _showProfileScreen = false;
@@ -60,16 +58,123 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _showRequestPreview = false;
   PassengerRequest? _previewedRequest;
 
-  // Location management
-  bool _isUpdatingLocation = false; // Prevent circular updates
-
-  // Add this with your other variables
   late EmergencySosService _sosService;
   bool _isSosInitialized = false;
+  Timer? _routeMonitorTimer;
+  bool _autoFindRequests = false;
+  Timer? _autoFindTimer;
+
+  Timer? _routeCheckTimer;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Initialize everything only once
+    _initializeControllers();
+    _initializeEmergencySOS();
+    _initializeLocationService();
+    _checkPermissions();
+
+    // Use a single timer for location sync with adaptive interval
+    _setupLocationSyncTimer();
+
+    // Set up ride state change listener
+    _setupRideStateListener();
+
+    // Configure UI
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+    ));
+  }
+
+// Set up location sync timer with adaptive interval
+  void _setupLocationSyncTimer() {
+    _locationSyncTimer?.cancel();
+    int interval = _rideController.isInRide ? 2 : 5;
+    _locationSyncTimer = Timer.periodic(Duration(seconds: interval), (_) {
+      _syncActualMapPosition();
+    });
+  }
+
+// Set up ride state change listener
+  void _setupRideStateListener() {
+    _rideController.addListener(() {
+      // Update sync timer frequency based on ride state
+      _setupLocationSyncTimer();
+
+      // Handle request fetching based on online status
+      if (_rideController.isOnline && !_rideController.isInRide) {
+        _startAutoFindRequests();
+      } else {
+        _stopAutoFindRequests();
+      }
+    });
+  }
+
+
+
+  void _startAutoFindRequests() {
+    _autoFindTimer?.cancel();
+    _autoFindTimer = Timer.periodic(Duration(seconds: 15), (_) async {
+      if (!_rideController.isLoadingRequests && _rideController.isOnline && !_rideController.isInRide) {
+        print("Auto-fetching requests...");
+        await _rideController.fetchNearbyRequests();
+        if (_rideController.nearbyRequests.isNotEmpty && _mapController.mapController != null) {
+          await _mapController.addPassengerMarkersToMap(_rideController.nearbyRequests);
+
+          // Show requests if any are found
+          if (_rideController.nearbyRequests.isNotEmpty) {
+            print("Found ${_rideController.nearbyRequests.length} requests, showing list");
+            _rideController.setShowRequestsList(true);
+          }
+        }
+      }
+    });
+  }
+
+  void _stopAutoFindRequests() {
+    _autoFindTimer?.cancel();
+    _autoFindTimer = null;
+  }
+
+  void _onMapCreated(MaplibreMapController controller) {
+    // Set controller in MapController
+    _mapController.setMapController(controller);
+
+    // No need to call _startRouteMonitoring() since MapController already handles it
+
+    // Calculate initial route distances if route exists
+    Future.delayed(Duration(seconds: 1), () {
+      if (_mapController.currentRoute.isNotEmpty) {
+        // Let MapController handle this
+        _mapController.notifyRouteChanged();
+      }
+    });
+  }
+
+  void _syncActualMapPosition() {
+    if (_mapController.mapController == null) return;
+
+    _mapController.mapController!.requestMyLocationLatLng().then((location) {
+      if (location != null) {
+        // Update the location through LocationBridge
+        LocationBridge().updateLocation(location);
+
+        // MapController will handle route progress tracking internally
+        // when updateDriverLocation is called via LocationBridge
+
+        print("🔵 Synced actual map position: (${location.latitude}, ${location.longitude})");
+      }
+    }).catchError((error) {
+      print("Error getting actual map position: $error");
+    });
+  }
 
   void _initializeLocationService() {
     if (!_isLocationServiceInitialized) {
-      _locationService = LocationService();
+      // No need to create the service instance here since it's already initialized
 
       // Get the LocationBridge from provider
       final locationBridge = ref.read(locationBridgeProvider);
@@ -86,9 +191,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         rideIntervalMs: 3000,     // 3 seconds during active ride
       );
 
-      // Set callback for location updates (can be removed if using LocationBridge exclusively)
+      // Set callback for location updates
       _locationService.onLocationChanged = (LatLng location) {
-        // This callback is optional now as LocationBridge handles distribution
         print("📱 Location update received: (${location.latitude}, ${location.longitude})");
       };
 
@@ -104,20 +208,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _initializeControllers();
-    _initializeEmergencySOS();
-    _initializeLocationService();
-    _checkPermissions();
-
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-    ));
-  }
-// In your _initializeEmergencySOS() method in HomeScreen:
   void _initializeEmergencySOS() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_isSosInitialized) {
@@ -219,30 +309,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
-  // Centralized location update method to prevent circular calls
-  void _updateLocationInBothControllers(LatLng location) {
-    if (_isUpdatingLocation) return; // Prevent circular calls
-
-    _isUpdatingLocation = true;
-
-    // Update both controllers directly without triggering callbacks
-    _mapController.updateDriverLocation(location);
-    _rideController.setLocation(location);
-
-    // Update address
-    _getAddressFromLatLng(location);
-
-    _isUpdatingLocation = false;
-  }
-
   Future<void> _checkPermissions() async {
     await PermissionService.requestLocationPermission(context);
     final location = await PermissionService.getCurrentLocation();
     if (location != null) {
       final driverLocation = LatLng(location.latitude, location.longitude);
 
-      // Use centralized update method
-      _updateLocationInBothControllers(driverLocation);
+      LocationBridge().updateLocation(driverLocation);
+
+      _getAddressFromLatLng(driverLocation);
 
       if (_mapController.mapController != null) {
         _mapController.moveCameraToLocation(driverLocation);
@@ -274,26 +349,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         });
       }
     }
-  }
-
-  void _onMapCreated(MaplibreMapController controller) {
-    _mapController.setMapController(controller);
-
-    // Register the MapController with LocationBridge
-    final locationBridge = ref.read(locationBridgeProvider);
-    locationBridge.registerMapController(_mapController);
-
-    // Pass the map controller to the location service for debug features
-    _locationService.setMapLibreController(controller);
-
-    // This line can stay for backward compatibility
-    _locationService.setMapController(_mapController);
-
-    if (_rideController.driverLocation != null) {
-      _mapController.moveCameraToLocation(_rideController.driverLocation!);
-    }
-
-    print("🗺️ Map initialized and controllers registered with LocationBridge");
   }
 
   void _showSnackBar(String message) {
@@ -334,41 +389,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   @override
-  void dispose() {
-    // Set flag first to prevent callbacks from accessing disposed controllers
-    _controllersInitialized = false;
-    _rideController.dispose();
-    _mapController.dispose();
-    if (_isLocationServiceInitialized) {
-      _locationService.dispose();
-    }
-    // Stop SOS monitoring when leaving the screen
-    if (_isSosInitialized) {
-      _sosService.stopMonitoring();
-    }
-
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    // Show Profile screen if active
+    // Show specific screens when active
     if (_showProfileScreen) {
       return ProfileScreen(onBackPressed: _showHome);
-    }
-
-    // Show Settings screen if active
-    if (_showSettingsScreen) {
+    } else if (_showSettingsScreen) {
       return SettingsScreen(onBackPressed: _showHome);
-    }
-
-    // Show Ride History screen if active
-    if (_showRideHistoryScreen) {
+    } else if (_showRideHistoryScreen) {
       return RideHistoryScreen(onBackPressed: _showHome);
-    }
-
-    // Show Earnings screen if active
-    if (_showEarningsScreen) {
+    } else if (_showEarningsScreen) {
       return DriverEarningsScreen(onBackPressed: _showHome);
     }
 
@@ -397,98 +426,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 myLocationEnabled: true,
               ),
 
-              // Transparent gesture detector for debug mode map taps
-              if (_locationService.isDebugModeEnabled)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTapUp: (details) {
-                      if (_mapController.mapController != null) {
-                        // Get the rendered map size
-                        Size mapSize = Size(
-                          MediaQuery.of(context).size.width,
-                          MediaQuery.of(context).size.height,
-                        );
-
-                        // Try to convert tap position to map coordinates
-                        _mapController.mapController!.getVisibleRegion().then((bounds) {
-                          if (bounds != null) {
-                            // Calculate relative position within the map
-                            double relX = details.localPosition.dx / mapSize.width;
-                            double relY = details.localPosition.dy / mapSize.height;
-
-                            // Interpolate between southwest and northeast to get approximate coordinates
-                            double lat = bounds.southwest.latitude +
-                                (bounds.northeast.latitude - bounds.southwest.latitude) * (1 - relY);
-                            double lng = bounds.southwest.longitude +
-                                (bounds.northeast.longitude - bounds.southwest.longitude) * relX;
-
-                            // Use the simulated position
-                            _locationService.simulateArrivalAt(LatLng(lat, lng));
-                          }
-                        });
-                      }
-                    },
-                    child: Container(color: Colors.transparent),
-                  ),
-                ),
-
               // Top Status Bar
               _buildTopStatusBar(),
 
-              // Debug Controls - placed after map but before other UI
-              DebugControls(
-                locationService: _locationService,
-                destinationLocation: _rideController.currentRide != null
-                    ? LatLng(
-                    _rideController.currentRide!.destinationLat,
-                    _rideController.currentRide!.destinationLng
-                )
-                    : null,
-                currentRoute: _mapController.currentRoute,
-              ),
-
-              // Recalculate button - center right
+              // Auto-recalculate toggle button - only when in a ride
               if (_rideController.isInRide)
                 Positioned(
                   right: 16,
-                  top: MediaQuery.of(context).size.height / 2 - 28, // Centered vertically
+                  top: MediaQuery.of(context).size.height / 2 - 80,
+                  child: FloatingActionButton(
+                    onPressed: () {
+                      setState(() {
+                        _mapController.autoRecalculateEnabled = !_mapController.autoRecalculateEnabled;
+                      });
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              _mapController.autoRecalculateEnabled
+                                  ? 'Auto-recalculate enabled'
+                                  : 'Auto-recalculate disabled'
+                          ),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    backgroundColor: _mapController.autoRecalculateEnabled ? Colors.green : Colors.grey,
+                    mini: true,
+                    heroTag: "toggleAutoRecalculate",
+                    tooltip: "Toggle auto-recalculate",
+                    child: Icon(
+                      _mapController.autoRecalculateEnabled ? Icons.sync : Icons.sync_disabled,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+
+              // Manual recalculate button - only when in a ride
+              if (_rideController.isInRide)
+                Positioned(
+                  right: 16,
+                  top: MediaQuery.of(context).size.height / 2 - 28,
                   child: FloatingActionButton(
                     onPressed: () {
                       if (_mapController.mapController != null) {
-                        // Get actual blue dot position
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Recalculating route...'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+
                         _mapController.mapController!.requestMyLocationLatLng().then((location) {
                           if (location != null) {
-                            print("Got ACTUAL blue dot position: (${location.latitude}, ${location.longitude})");
-
-                            // Clear existing route first
-                            _mapController.clearRoute();
-
-                            // Force update the driver location with this location
-                            _mapController.updateDriverLocation(location);
-
-                            // Get destination from ride controller
-                            if (_rideController.currentRide != null) {
-                              final destination = LatLng(
-                                  _rideController.currentRide!.destinationLat,
-                                  _rideController.currentRide!.destinationLng
-                              );
-
-                              // Add a small delay to ensure location update is processed
-                              Future.delayed(Duration(milliseconds: 200), () {
-                                // Now calculate a fresh route
-                                _mapController.showRouteToLocation(destination);
-                              });
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Recalculating route from current position'),
-                                duration: Duration(seconds: 2),
-                              ),
-                            );
+                            _recalculateRouteFromLocation(location);
                           } else {
-                            // Fallback if location not available
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text('Cannot get current position'),
@@ -499,7 +491,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           }
                         });
                       } else {
-                        // Fallback if map controller isn't initialized
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text('Cannot recalculate: Map not ready'),
@@ -540,6 +531,48 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+// Helper method for recalculating route
+  void _recalculateRouteFromLocation(LatLng location) {
+    if (_rideController.currentRide != null) {
+      // Determine destination based on ride state
+      LatLng destination;
+      if (_rideController.rideState == RideState.enrouteToPickup) {
+        destination = LatLng(
+            _rideController.currentRide!.pickupLat,
+            _rideController.currentRide!.pickupLng
+        );
+      } else {
+        destination = LatLng(
+            _rideController.currentRide!.destinationLat,
+            _rideController.currentRide!.destinationLng
+        );
+      }
+
+      // Clear existing route
+      _mapController.clearRoute();
+
+      // Calculate new route
+      _mapController.showRouteToLocation(destination).then((success) {
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Route recalculated successfully'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to recalculate route'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      });
+    }
+  }
   Widget _buildTopStatusBar() {
     return Positioned(
       top: MediaQuery.of(context).viewPadding.top,
@@ -682,64 +715,80 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               offset: Offset(0, -4),
             ),
           ],
-          border: Border.all(
-            color: Colors.grey[850]!,
-            width: 1,
-          ),
+          border: Border.all(color: Colors.grey[850]!, width: 1),
         ),
-        child: Padding(
-          padding: EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!_rideController.isInRide)
-                _buildOfflineControls()
-              else
-                _buildRideControls(),
-
-              // Timestamp footer
-              SizedBox(height: 8),
-              Divider(color: Colors.grey[850], height: 1),
-              SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Icon(
-                    Icons.access_time,
-                    size: 9,
-                    color: Colors.grey[600],
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    "2025-06-03 18:53:11",
-                    style: TextStyle(
-                      fontSize: 9,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Minimize toggle bar
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isBottomPanelMinimized = !_isBottomPanelMinimized;
+                });
+              },
+              child: Container(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: Color(0xFF222222),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
                       color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-                  SizedBox(width: 12),
-                  Icon(
-                    Icons.person,
-                    size: 9,
-                    color: Colors.grey[600],
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    "Lilydebug",
-                    style: TextStyle(
-                      fontSize: 9,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                ),
               ),
-            ],
-          ),
+            ),
+
+            // Show minimized or full panel based on state
+            if (!_isBottomPanelMinimized)
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!_rideController.isInRide)
+                      _buildOfflineControls()
+                    else
+                      _buildRideControls(),
+
+                    // Timestamp footer
+                    SizedBox(height: 8),
+                    Divider(color: Colors.grey[850], height: 1),
+                    SizedBox(height: 8),
+                    _buildFooterTimestamp(),
+                  ],
+                ),
+              )
+            else
+              _buildMinimizedControls(),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _buildFooterTimestamp() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        Icon(Icons.access_time, size: 9, color: Colors.grey[600]),
+        SizedBox(width: 4),
+        Text(
+          "Last updated",
+          style: TextStyle(
+            fontSize: 9,
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 
@@ -877,57 +926,206 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
 
-        // Find Requests Button
-        if (_rideController.isOnline) ...[
-          SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: ElevatedButton.icon(
-              onPressed: _rideController.isLoadingRequests
-                  ? null
-                  : () async {
-                // Add passenger markers to map when fetching requests
-                await _rideController.fetchNearbyRequests();
-                if (_rideController.nearbyRequests.isNotEmpty && _mapController.mapController != null) {
-                  await _mapController.addPassengerMarkersToMap(_rideController.nearbyRequests);
-                }
-                _rideController.setShowRequestsList(true);
-              },
-              icon: _rideController.isLoadingRequests
-                  ? SizedBox(
-                height: 16,
-                width: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
+        // Status indicator when online + manual refresh button
+        if (_rideController.isOnline)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _rideController.isLoadingRequests
+                    ? SizedBox(
+                  height: 14,
+                  width: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                    : Icon(Icons.search, size: 14, color: Colors.grey[400]),
+                SizedBox(width: 8),
+                Text(
+                  _rideController.isLoadingRequests ? "Finding requests..." : "Searching for ride requests",
+                  style: TextStyle(
+                    color: _rideController.isLoadingRequests ? Colors.white70 : Colors.grey[400],
+                    fontSize: 12,
+                  ),
                 ),
-              )
-                  : Icon(Icons.refresh, color: Colors.white, size: 18),
-              label: Text(
-                _rideController.isLoadingRequests ? 'Finding...' : 'Find Requests',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
+                SizedBox(width: 8),
+                // Added manual refresh button
+                GestureDetector(
+                  onTap: _rideController.isLoadingRequests
+                      ? null
+                      : () async {
+                    await _rideController.fetchNearbyRequests();
+                    if (_rideController.nearbyRequests.isNotEmpty && _mapController.mapController != null) {
+                      await _mapController.addPassengerMarkersToMap(_rideController.nearbyRequests);
+                      _rideController.setShowRequestsList(true);
+                    }
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: _rideController.isLoadingRequests ? Color(0xFF333333).withOpacity(0.5) : Color(0xFF333333),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.refresh,
+                      size: 12,
+                      color: _rideController.isLoadingRequests ? Colors.grey[600] : Colors.white,
+                    ),
+                  ),
                 ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF2A2A2A),
-                disabledBackgroundColor: Color(0xFF2A2A2A).withOpacity(0.5),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
+              ],
             ),
           ),
 
-          // Preview of top request when not showing full list
-          if (_rideController.nearbyRequests.isNotEmpty && !_rideController.showRequestsList)
-            _buildRequestPreview(),
-        ],
+        // Preview of top request when not showing full list
+        if (_rideController.nearbyRequests.isNotEmpty && !_rideController.showRequestsList)
+          _buildRequestPreview(),
       ],
+    );
+  }
+
+  Widget _buildMinimizedControls() {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Driver status indicator
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _rideController.isOnline ? Colors.green : Colors.grey,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              SizedBox(width: 4),
+              Text(
+                _rideController.isOnline
+                    ? (_rideController.isInRide ? _rideController.getRideStateText() : "Online")
+                    : "Offline",
+                style: TextStyle(
+                  color: _rideController.isOnline ? Colors.white : Colors.grey,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+
+          // Action buttons
+          Row(
+            children: [
+              // Location button
+              Container(
+                decoration: BoxDecoration(
+                  color: Color(0xFF333333),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  icon: Icon(Icons.my_location, color: Colors.white, size: 16),
+                  onPressed: () {
+                    if (_rideController.driverLocation != null && _mapController.mapController != null) {
+                      _mapController.moveCameraToLocation(_rideController.driverLocation!);
+                    }
+                  },
+                  constraints: BoxConstraints(minWidth: 28, minHeight: 28),
+                  padding: EdgeInsets.all(6),
+                ),
+              ),
+              SizedBox(width: 8),
+
+              // Toggle online/offline button (if not in ride)
+              if (!_rideController.isInRide)
+                Container(
+                  decoration: BoxDecoration(
+                    color: _rideController.isOnline ? Colors.orange : Color(0xFFFF4B6C),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                        _rideController.isOnline ? Icons.pause : Icons.play_arrow,
+                        color: Colors.white,
+                        size: 16
+                    ),
+                    onPressed: _rideController.toggleDriverStatus,
+                    constraints: BoxConstraints(minWidth: 28, minHeight: 28),
+                    padding: EdgeInsets.all(6),
+                  ),
+                ),
+
+              // If in a ride, show arrive button when near destination
+              if (_rideController.isInRide && _rideController.canArrive)
+                Container(
+                  decoration: BoxDecoration(
+                    color: Color(0xFFFF4B6C),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                        _rideController.rideState == RideState.enrouteToPickup
+                            ? Icons.location_on
+                            : Icons.flag,
+                        color: Colors.white,
+                        size: 16
+                    ),
+                    // Fixed method call to use the correct arrive methods
+                    onPressed: () {
+                      if (_rideController.canArrive) {
+                        if (_rideController.rideState == RideState.enrouteToPickup) {
+                          _rideController.arrivedAtPickup();
+                        } else if (_rideController.rideState == RideState.enrouteToDestination) {
+                          _rideController.arrivedAtDestination();
+                        }
+                      }
+                    },
+                    constraints: BoxConstraints(minWidth: 28, minHeight: 28),
+                    padding: EdgeInsets.all(6),
+                  ),
+                ),
+
+              // Find requests button (if online and not in ride)
+              if (_rideController.isOnline && !_rideController.isInRide)
+                SizedBox(width: 8),
+              if (_rideController.isOnline && !_rideController.isInRide)
+                Container(
+                  decoration: BoxDecoration(
+                    color: Color(0xFF2A2A2A),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: _rideController.isLoadingRequests
+                        ? SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                        : Icon(Icons.refresh, color: Colors.white, size: 16),
+                    onPressed: _rideController.isLoadingRequests
+                        ? null
+                        : () async {
+                      await _rideController.fetchNearbyRequests();
+                      if (_rideController.nearbyRequests.isNotEmpty && _mapController.mapController != null) {
+                        await _mapController.addPassengerMarkersToMap(_rideController.nearbyRequests);
+                      }
+                      _rideController.setShowRequestsList(true);
+                    },
+                    constraints: BoxConstraints(minWidth: 28, minHeight: 28),
+                    padding: EdgeInsets.all(6),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -1089,7 +1287,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  // Helper methods for the ride UI
   String _getCurrentDestination() {
     if (_rideController.currentRide == null) return "";
 
@@ -1138,8 +1335,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_rideController.currentRide == null) return Container();
 
     final request = _rideController.currentRide!;
-    final String currentTimestamp = "2025-06-03 18:53:11";
-    final String currentUserLogin = "Lilydebug";
 
     return Column(
       children: [
@@ -1387,7 +1582,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             'image': _rideController.currentRide!.passengerImage,
                           },
                         );
-                        print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                        print(" Opening chat with ${_rideController.currentRide!.passengerName}");
                       }
                     },
                     icon: Icon(Icons.chat_bubble_outline, size: 18),
@@ -1481,7 +1676,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             'image': _rideController.currentRide!.passengerImage,
                           },
                         );
-                        print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                        print(" Opening chat with ${_rideController.currentRide!.passengerName}");
                       }
                     },
                     icon: Icon(Icons.chat_bubble_outline, size: 18),
@@ -1545,7 +1740,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               'image': _rideController.currentRide!.passengerImage,
                             },
                           );
-                          print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                          print(" Opening chat with ${_rideController.currentRide!.passengerName}");
                         }
                       },
                       icon: Icon(Icons.chat_bubble_outline, size: 18),
@@ -1611,7 +1806,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 'image': _rideController.currentRide!.passengerImage,
                               },
                             );
-                            print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                            print("Opening chat with ${_rideController.currentRide!.passengerName}");
                           }
                         },
                         icon: Icon(Icons.chat_bubble_outline, size: 18),
@@ -1686,7 +1881,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   'image': _rideController.currentRide!.passengerImage,
                                 },
                               );
-                              print("[$currentTimestamp] [$currentUserLogin] Opening chat with ${_rideController.currentRide!.passengerName}");
+                              print(" Opening chat with ${_rideController.currentRide!.passengerName}");
                             }
                           },
                           icon: Icon(Icons.chat_bubble_outline, size: 18),
@@ -1754,8 +1949,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       tripDistanceKm = request.additionalData!['tripDistanceKm'];
     }
 
+    // Auto-minimize bottom panel when showing preview
+    if (!_isBottomPanelMinimized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() {
+          _isBottomPanelMinimized = true;
+        });
+      });
+    }
+
     return Positioned(
-      bottom: 220,
+      bottom: _isBottomPanelMinimized ? 100 : 220,
       left: 16,
       right: 16,
       child: Container(
@@ -1803,11 +2007,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       setState(() {
                         _showRequestPreview = false;
                         _previewedRequest = null;
+                        // Maximize bottom panel on close
+                        _isBottomPanelMinimized = false;
                       });
                       // Clear destination preview
-                      if (_mapController.mapController != null) {
-                        _mapController.clearDestinationPreview();
-                      }
+                      _mapController.clearDestinationPreview();
+                      // Re-show requests list
+                      _rideController.setShowRequestsList(true);
                     },
                     child: Container(
                       padding: EdgeInsets.all(4),
@@ -1944,7 +2150,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
               SizedBox(height: 12),
 
-              // Destination location (THIS IS THE MISSING INFORMATION)
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2001,6 +2206,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               Divider(color: Colors.grey[800], height: 1),
               SizedBox(height: 16),
 
+
               // Accept/Decline buttons
               Row(
                 children: [
@@ -2012,11 +2218,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           setState(() {
                             _showRequestPreview = false;
                             _previewedRequest = null;
+                            // Maximize bottom panel on decline
+                            _isBottomPanelMinimized = false;
                           });
                           // Clear destination preview
-                          if (_mapController.mapController != null) {
-                            _mapController.clearDestinationPreview();
-                          }
+                          _mapController.clearDestinationPreview();
+                          // Re-show requests list
+                          _rideController.setShowRequestsList(true);
                         },
                         icon: Icon(Icons.close, size: 18),
                         label: Text(
@@ -2042,6 +2250,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       height: 44,
                       child: ElevatedButton.icon(
                         onPressed: () {
+                          _mapController.clearDestinationPreview();
                           // Accept the request and close the preview
                           setState(() {
                             _showRequestPreview = false;
@@ -2049,6 +2258,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                           // Accept the request and proceed to pickup navigation
                           _rideController.acceptRequest(request);
+                          // Keep panel minimized when accepting ride
                         },
                         icon: Icon(Icons.check, size: 18),
                         label: Text(
@@ -2080,8 +2290,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _buildPassengerRequestsOverlay() {
+    if (!_isBottomPanelMinimized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() {
+          _isBottomPanelMinimized = true;
+        });
+      });
+    }
+
     return Positioned(
-      bottom: 220,
+      bottom: _isBottomPanelMinimized ? 100 : 220,
       left: 16,
       right: 16,
       child: Container(
@@ -2151,6 +2369,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   GestureDetector(
                     onTap: () {
                       _rideController.setShowRequestsList(false);
+                      // Maximize bottom panel when closing requests list
+                      setState(() {
+                        _isBottomPanelMinimized = false;
+                      });
                     },
                     child: Container(
                       padding: EdgeInsets.all(4),
@@ -2181,6 +2403,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   final request = _rideController.nearbyRequests[index];
                   return InkWell(
                     onTap: () {
+                      _mapController.clearDestinationPreview();
                       // Show preview instead of accepting immediately
                       setState(() {
                         _showRequestPreview = true;
@@ -2399,18 +2622,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              SizedBox(height: 4),
-              Text(
-                "2025-06-03 18:53:11",
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey[400],
-                ),
-              ),
             ],
           ),
         ),
       ),
     );
+  }
+  @override
+  void dispose() {
+    // Cancel all timers
+    _autoFindTimer?.cancel();
+    _locationSyncTimer?.cancel();
+
+    // Clean up controllers if we're responsible for them
+    if (_controllersInitialized) {
+      _rideController.dispose();
+      _mapController.dispose();
+    }
+
+    // Clean up services
+    if (_isLocationServiceInitialized) {
+      _locationService.dispose();
+    }
+
+    if (_isSosInitialized) {
+      _sosService.stopMonitoring();
+    }
+
+    super.dispose();
   }
 }

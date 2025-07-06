@@ -36,7 +36,7 @@ class RideController extends ChangeNotifier {
   int ridesCompleted = 0;
   double rating = 4.5;
   String rank = "New";
-
+  Function()? onClearPreview;
   // Ride state
   bool isLoading = false;
   bool isLoadingRequests = false;
@@ -720,6 +720,8 @@ class RideController extends ChangeNotifier {
   }
 
   // Check if driver has arrived at destination
+// Update in RideController.dart - modify the _checkArrival method:
+
   void _checkArrival() {
     if (driverLocation == null || currentRide == null) return;
 
@@ -745,11 +747,11 @@ class RideController extends ChangeNotifier {
     // Convert to meters
     double distanceMeters = distanceKm * 1000;
 
-    // Dynamic arrival radius - larger for destination to make it easier to detect arrival
+    // UPDATED: Larger arrival radius and debug output
     double effectiveRadius = arrivalRadius;
     if (rideState == RideState.enrouteToDestination) {
       // Use a larger radius for destination arrival detection
-      effectiveRadius = 100.0; // 100 meters for destination
+      effectiveRadius = 150.0; // Increased from 100m to 150m for destination
     }
 
     // Store previous state to detect changes
@@ -758,12 +760,17 @@ class RideController extends ChangeNotifier {
     // Update arrival status
     canArrive = distanceMeters <= effectiveRadius;
 
+    // Add debug output
+    print("Distance to ${rideState == RideState.enrouteToPickup ? 'pickup' : 'destination'}: ${distanceMeters.toStringAsFixed(1)}m (radius: ${effectiveRadius}m, can arrive: $canArrive)");
+
     // If arrival status changed, notify
     if (wasArrival != canArrive) {
       notifyListeners();
+      if (canArrive) {
+        onShowSnackBar?.call('You have arrived! Tap "Arrived" to confirm.');
+      }
     }
   }
-
   // Calculate distance between two points
   double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     const R = 6371.0; // Earth radius in km
@@ -866,13 +873,6 @@ class RideController extends ChangeNotifier {
     }
   }
 
-  // Show/hide requests list
-  void setShowRequestsList(bool show) {
-    showRequestsList = show;
-    notifyListeners();
-  }
-
-  // Accept a passenger request
   Future<void> acceptRequest(PassengerRequest request) async {
     try {
       isLoading = true;
@@ -890,7 +890,10 @@ class RideController extends ChangeNotifier {
         currentRide = request;
         showRequestsList = false;
 
-        // Clear any existing route first
+        // Clear all passenger markers first
+        onClearMarkers?.call();
+
+        // Clear any existing route
         onClearRoute?.call();
 
         // Show route to pickup location
@@ -916,7 +919,6 @@ class RideController extends ChangeNotifier {
       notifyListeners();
     }
   }
-
   // Mark arrived at pickup
   Future<void> arrivedAtPickup() async {
     if (currentRide == null) return;
@@ -1107,19 +1109,26 @@ class RideController extends ChangeNotifier {
     }
   }
 
+  void setShowRequestsList(bool show) {
+    // If we're hiding the requests list, clear any preview
+    if (!show && showRequestsList) {
+      onClearRoute?.call();
+      onClearPreview?.call();
+    }
+
+    showRequestsList = show;
+    notifyListeners();
+  }
   // Dispose method
   @override
   void dispose() {
-    @override
-    void dispose() {
-      _arrivalCheckTimer?.cancel();
-      _rideSubscription?.cancel();
-      _requestListener?.cancel();
+    _arrivalCheckTimer?.cancel();
+    _rideSubscription?.cancel();
+    _requestListener?.cancel();
 
-      // Unregister from LocationBridge
-      LocationBridge().unregisterRideController(this);
+    // Unregister from LocationBridge
+    LocationBridge().unregisterRideController(this);
 
-      super.dispose();
-    }
+    super.dispose();
   }
 }

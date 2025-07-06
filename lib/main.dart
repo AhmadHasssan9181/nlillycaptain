@@ -9,16 +9,10 @@ import 'firebase_options.dart';
 import 'location_bridge.dart';
 import 'router/app_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 
 // Create a provider for LocationBridge
 final locationBridgeProvider = Provider<LocationBridge>((ref) {
-  final bridge = LocationBridge();
-  // Enable debug mode for LocationBridge in debug builds
-  if (kDebugMode) {
-    bridge.setDebugMode(true);
-  }
-  return bridge;
+  return LocationBridge();
 });
 
 void main() async {
@@ -63,7 +57,7 @@ class _MyAppState extends ConsumerState<MyApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(emergencySosProvider.notifier).initialize();
 
-      // Initialize location bridge instead of manager
+      // Initialize location bridge
       ref.read(locationBridgeProvider);
     });
   }
@@ -93,22 +87,6 @@ class _MyAppState extends ConsumerState<MyApp> {
             if (sosState.isActivated) const SOSOverlay(),
           ],
         );
-      },
-    );
-  }
-}
-
-// Add this if you want a way to test the SOS functionality from anywhere
-class SosTestButton extends ConsumerWidget {
-  const SosTestButton({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FloatingActionButton(
-      backgroundColor: Colors.red,
-      child: const Icon(Icons.warning_amber_rounded),
-      onPressed: () {
-        ref.read(emergencySosProvider.notifier).triggerTestCrash();
       },
     );
   }

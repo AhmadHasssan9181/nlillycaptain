@@ -22,9 +22,18 @@ class MapController {
   List<Line> _routeLines = [];
   List<Circle> _previewCircles = [];
   List<Line> _previewLines = [];
+  bool autoRecalculateEnabled = true;
 
   // Navigation state
   bool _isNavigating = false;
+
+  // Route tracking
+  List<double> _cumulativeDistances = [];
+  double _totalRouteDistance = 0.0;
+  Timer? _locationSyncTimer;
+  bool _isRecalculating = false;
+  final double _recalculationThreshold = 10.0; // meters
+  int _lastClosestPointIndex = 0;
 
   // Getters
   MaplibreMapController? get mapController => _mapController;
@@ -33,26 +42,207 @@ class MapController {
   List<LatLng> get currentRoute => _currentRoute;
   bool get isNavigating => _isNavigating;
 
+  // Called whenever a new route is calculated
+  void _calculateCumulativeDistances(List<LatLng> route) {
+    _cumulativeDistances = [];
+    _totalRouteDistance = 0.0;
+    _lastClosestPointIndex = 0;
+
+    if (route.isEmpty) return;
+
+    _cumulativeDistances.add(0.0); // First point has distance 0
+
+    for (int i = 1; i < route.length; i++) {
+      double segmentDist = calculateDistance(
+          route[i-1].latitude, route[i-1].longitude,
+          route[i].latitude, route[i].longitude
+      );
+      _totalRouteDistance += segmentDist;
+      _cumulativeDistances.add(_totalRouteDistance);
+    }
+  }
+
+  // Get remaining distance to destination as driver moves
+  String getDistanceToTarget() {
+    if (_driverLocation == null || _currentTarget == null ||
+        _currentRoute.isEmpty || _cumulativeDistances.isEmpty) {
+      return "";
+    }
+
+    // Find closest point on route to current location
+    double minDist = double.infinity;
+    int closestIdx = 0;
+
+    // Only check a reasonable number of points for performance
+    // Start from last known closest point
+    int startIdx = max(0, _lastClosestPointIndex - 5);
+    int endIdx = min(_currentRoute.length, _lastClosestPointIndex + 20);
+
+    for (int i = startIdx; i < endIdx; i++) {
+      double dist = calculateDistance(
+          _driverLocation!.latitude, _driverLocation!.longitude,
+          _currentRoute[i].latitude, _currentRoute[i].longitude
+      );
+
+      if (dist < minDist) {
+        minDist = dist;
+        closestIdx = i;
+      }
+    }
+
+    // Store for next calculation
+    _lastClosestPointIndex = closestIdx;
+
+    // If off route, recalculate
+    if (minDist * 1000 > 10.0) {
+      // Avoid recalculating too often with a simple debounce
+      if (!_isRecalculating) {
+        _isRecalculating = true;
+        _recalculateRoute().then((success) {
+          _isRecalculating = false;
+        });
+      }
+    }
+
+    // Calculate remaining distance along route
+    double remainingDistance = _totalRouteDistance - _cumulativeDistances[closestIdx];
+    remainingDistance = max(0.0, remainingDistance);
+
+    // Format distance for display
+    if (remainingDistance < 1.0) {
+      int meters = (remainingDistance * 1000).round();
+      return "$meters m away";
+    } else {
+      return "${remainingDistance.toStringAsFixed(1)} km away";
+    }
+  }
+
+  // Recalculate route when driver deviates
+  Future<bool> _recalculateRoute() async {
+    if (_currentTarget == null || _driverLocation == null) {
+      return false;
+    }
+
+    // Clear existing route
+    clearRoute();
+
+    // Calculate new route
+    try {
+      return await showRouteToLocation(_currentTarget!);
+    } catch (e) {
+      print("Exception during route recalculation: $e");
+      return false;
+    }
+  }
+
+  Future<bool> checkAndRecalculateRouteIfNeeded() async {
+    if (!autoRecalculateEnabled) {
+      return false;
+    }
+
+    if (_mapController == null || _driverLocation == null ||
+        _currentTarget == null || _currentRoute.isEmpty) {
+      return false;
+    }
+
+    if (_isRecalculating) {
+      return false;
+    }
+
+    // Find closest point on route to current location
+    double minDist = double.infinity;
+    for (var point in _currentRoute) {
+      double dist = calculateDistance(
+          _driverLocation!.latitude, _driverLocation!.longitude,
+          point.latitude, point.longitude
+      );
+      minDist = min(minDist, dist);
+    }
+
+    // Convert to meters
+    double distanceMeters = minDist * 1000;
+
+    // Check if we're off route
+    if (distanceMeters > 10.0) {
+      _isRecalculating = true;
+
+      try {
+        // Clear existing route
+        clearRoute();
+
+        // Calculate new route from current position
+        bool success = await showRouteToLocation(_currentTarget!);
+
+        _isRecalculating = false;
+        return success;
+      } catch (e) {
+        _isRecalculating = false;
+        print("Error recalculating route: $e");
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  // Update the driver location
+  void updateDriverLocation(LatLng location) {
+    if (location.latitude == 0 && location.longitude == 0) return;
+
+    _driverLocation = location;
+
+    // If we have a route and target, update distances
+    if (_currentTarget != null && _currentRoute.isNotEmpty) {
+      if (!_isNavigating) _isNavigating = true;
+
+      // getDistanceToTarget will check for deviations and trigger recalculation
+      getDistanceToTarget();
+    }
+  }
+
+  // Updated route display method
+  void _addRouteToMap(List<LatLng> route) {
+    if (_mapController == null) return;
+
+    // Calculate cumulative distances for this route
+    _calculateCumulativeDistances(route);
+
+    // Add route outline (wider white line underneath for better visibility)
+    _mapController!.addLine(
+      LineOptions(
+        geometry: route,
+        lineWidth: 10,
+        lineColor: "#FFFFFF",
+        lineOpacity: 0.4,
+        lineJoin: "round",
+      ),
+    ).then((line) {
+      if (line != null) _routeLines.add(line);
+    });
+
+    // Add primary route line
+    _mapController!.addLine(
+      LineOptions(
+        geometry: route,
+        lineWidth: 6,
+        lineColor: "#FF4B6C",
+        lineOpacity: 0.8,
+        lineJoin: "round",
+      ),
+    ).then((line) {
+      if (line != null) _routeLines.add(line);
+    });
+  }
+
+  void notifyRouteChanged() {
+    if (_currentRoute.isNotEmpty) {
+      _calculateCumulativeDistances(_currentRoute);
+    }
+  }
+
   // Initialize the map controller
   void setMapController(MaplibreMapController controller) {
     _mapController = controller;
-    print("Map controller initialized");
-  }
-
-  // Central location update method
-  void updateDriverLocation(LatLng location) {
-    if (location.latitude == 0 && location.longitude == 0) {
-      print("Ignoring invalid location (0,0)");
-      return;
-    }
-
-    _driverLocation = location;
-    print("Driver location updated to: (${location.latitude}, ${location.longitude})");
-
-    // Update navigation state if needed
-    if (_currentTarget != null && _currentRoute.isNotEmpty && !_isNavigating) {
-      _isNavigating = true;
-    }
   }
 
   // Get the actual blue dot position from MapLibre
@@ -60,34 +250,27 @@ class MapController {
     if (_mapController == null) return null;
 
     try {
-      final position = await _mapController!.requestMyLocationLatLng();
-      if (position != null) {
-        print("Got actual map position: (${position.latitude}, ${position.longitude})");
-      }
-      return position;
+      return await _mapController!.requestMyLocationLatLng();
     } catch (e) {
       print("Error getting actual map position: $e");
       return null;
     }
   }
 
-  // Recalculate route using the ACTUAL map position
+  // Recalculate route using the actual map position
   Future<bool> recalculateRouteFromActualPosition() async {
     if (_mapController == null || _currentTarget == null) {
-      print("Cannot recalculate: map controller or target is null");
       return false;
     }
 
     // Get the actual blue dot position from the map
     final actualPosition = await getActualMapPosition();
     if (actualPosition == null) {
-      print("Failed to get actual position from map");
       return false;
     }
 
     // Update our stored driver location
     _driverLocation = actualPosition;
-    print("Recalculating route from actual position: (${actualPosition.latitude}, ${actualPosition.longitude})");
 
     // Clear existing route
     clearRoute();
@@ -96,10 +279,8 @@ class MapController {
     return await showRouteToLocation(_currentTarget!);
   }
 
-  // Calculate and show route from driver to destination
   Future<bool> showRouteToLocation(LatLng destination) async {
     if (_driverLocation == null || _mapController == null) {
-      print("Cannot show route: driver location or map controller is null");
       return false;
     }
 
@@ -108,9 +289,13 @@ class MapController {
     // Clean up before showing new route
     clearRoute();
 
-    try {
-      print("Calculating route from: (${_driverLocation!.latitude}, ${_driverLocation!.longitude}) to: (${destination.latitude}, ${destination.longitude})");
+    // Start periodic route deviation checking
+    _locationSyncTimer?.cancel();
+    _locationSyncTimer = Timer.periodic(Duration(seconds: 2), (_) {
+      checkAndRecalculateRouteIfNeeded();
+    });
 
+    try {
       // Use OpenRouteService API
       const apiKey = '5b3ce3597851110001cf6248099f56e121c64067b5762a109e70ee9b';
       final url = 'https://api.openrouteservice.org/v2/directions/driving-car';
@@ -147,7 +332,7 @@ class MapController {
           if (route.isNotEmpty) {
             _currentRoute = route;
             _addRouteToMap(route);
-            print("Route calculated successfully with ${route.length} points");
+            _calculateCumulativeDistances(route);
             _isNavigating = true;
             return true;
           }
@@ -155,7 +340,6 @@ class MapController {
       }
 
       // If API failed or returned empty route, use direct line
-      print("Using direct line as fallback");
       _addDirectLineToMap(_driverLocation!, destination);
       _currentRoute = [_driverLocation!, destination];
       _isNavigating = true;
@@ -170,17 +354,16 @@ class MapController {
     }
   }
 
-  // Move camera to specific location - ONLY WHEN EXPLICITLY CALLED
+  // Move camera to specific location
   void moveCameraToLocation(LatLng location) {
     if (_mapController == null) return;
 
-    print("Moving camera to: (${location.latitude}, ${location.longitude})");
     _mapController!.moveCamera(
       CameraUpdate.newLatLngZoom(location, 16.0),
     );
   }
 
-  // Fit map to show route - ONLY WHEN EXPLICITLY CALLED
+  // Fit map to show route
   void fitRouteInView(List<LatLng> route) {
     if (route.isEmpty || _mapController == null) return;
 
@@ -222,41 +405,6 @@ class MapController {
       _mapController!.removeLine(line);
     }
     _routeLines.clear();
-  }
-
-  // Add route to map
-  void _addRouteToMap(List<LatLng> route) {
-    if (_mapController == null) return;
-
-    // Add main route line
-    _mapController!.addLine(
-      LineOptions(
-        geometry: route,
-        lineWidth: 6,
-        lineColor: "#FF4B6C",  // Pink route color
-        lineOpacity: 0.8,
-        lineJoin: "round",
-      ),
-    ).then((line) {
-      if (line != null) {
-        _routeLines.add(line);
-      }
-    });
-
-    // Add route outline for better visibility
-    _mapController!.addLine(
-      LineOptions(
-        geometry: route,
-        lineWidth: 10,
-        lineColor: "#FFFFFF",
-        lineOpacity: 0.4,
-        lineJoin: "round",
-      ),
-    ).then((line) {
-      if (line != null) {
-        _routeLines.add(line);
-      }
-    });
   }
 
   // Add direct line between points
@@ -327,10 +475,10 @@ class MapController {
     _markerMap.clear();
   }
 
-  // Show destination preview
   Future<void> showDestinationPreview(LatLng pickupLocation, LatLng destinationLocation) async {
     if (_mapController == null) return;
 
+    // Clear any existing preview first
     clearDestinationPreview();
 
     // Add pickup marker
@@ -365,19 +513,103 @@ class MapController {
       _previewCircles.add(destinationCircle);
     }
 
-    // Add connecting line
-    final previewLine = await _mapController!.addLine(
-      LineOptions(
-        geometry: [pickupLocation, destinationLocation],
-        lineWidth: 3,
-        lineColor: "#4B6CFF",  // Blue preview line
-        lineOpacity: 0.7,
-        lineJoin: "round",
-      ),
-    );
+    try {
+      // Calculate actual route
+      const apiKey = '5b3ce3597851110001cf6248099f56e121c64067b5762a109e70ee9b';
+      final url = 'https://api.openrouteservice.org/v2/directions/driving-car';
 
-    if (previewLine != null) {
-      _previewLines.add(previewLine);
+      final body = json.encode({
+        "coordinates": [
+          [pickupLocation.longitude, pickupLocation.latitude],
+          [destinationLocation.longitude, destinationLocation.latitude],
+        ],
+      });
+
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          "Authorization": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: body,
+      );
+
+      List<LatLng> previewRoute = [];
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['routes'] != null && data['routes'].isNotEmpty) {
+          final geometry = data['routes'][0]['geometry'];
+          if (geometry is Map && geometry['coordinates'] != null) {
+            previewRoute = _decodeGeoJSON(geometry['coordinates']);
+          } else if (geometry is String) {
+            previewRoute = _decodePolyline(geometry);
+          }
+        }
+      }
+
+      if (previewRoute.isNotEmpty) {
+        // Add actual route line
+        final previewLine = await _mapController!.addLine(
+          LineOptions(
+            geometry: previewRoute,
+            lineWidth: 4,
+            lineColor: "#4B6CFF",  // Blue preview line
+            lineOpacity: 0.7,
+            lineJoin: "round",
+          ),
+        );
+
+        if (previewLine != null) {
+          _previewLines.add(previewLine);
+        }
+
+        // Add route outline
+        final outlineLine = await _mapController!.addLine(
+          LineOptions(
+            geometry: previewRoute,
+            lineWidth: 7,
+            lineColor: "#FFFFFF",
+            lineOpacity: 0.4,
+            lineJoin: "round",
+          ),
+        );
+
+        if (outlineLine != null) {
+          _previewLines.add(outlineLine);
+        }
+      } else {
+        // Fallback to direct line if route calculation fails
+        final previewLine = await _mapController!.addLine(
+          LineOptions(
+            geometry: [pickupLocation, destinationLocation],
+            lineWidth: 3,
+            lineColor: "#4B6CFF",  // Blue preview line
+            lineOpacity: 0.7,
+            lineJoin: "round",
+          ),
+        );
+
+        if (previewLine != null) {
+          _previewLines.add(previewLine);
+        }
+      }
+
+    } catch (e) {
+      print("Error calculating preview route: $e");
+      // Add fallback direct line
+      final previewLine = await _mapController!.addLine(
+        LineOptions(
+          geometry: [pickupLocation, destinationLocation],
+          lineWidth: 3,
+          lineColor: "#4B6CFF",  // Blue preview line
+          lineOpacity: 0.7,
+          lineJoin: "round",
+        ),
+      );
+
+      if (previewLine != null) {
+        _previewLines.add(previewLine);
+      }
     }
 
     // Fit both points in the camera view
@@ -518,25 +750,6 @@ class MapController {
     return "Current location";
   }
 
-  // Get distance to target
-  String getDistanceToTarget() {
-    if (_driverLocation == null || _currentTarget == null) return "";
-
-    double distanceKm = calculateDistance(
-      _driverLocation!.latitude,
-      _driverLocation!.longitude,
-      _currentTarget!.latitude,
-      _currentTarget!.longitude,
-    );
-
-    if (distanceKm < 1.0) {
-      int meters = (distanceKm * 1000).round();
-      return "$meters m away";
-    } else {
-      return "${distanceKm.toStringAsFixed(1)} km away";
-    }
-  }
-
   // Calculate distance between two points
   double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     const R = 6371.0; // Earth radius in km
@@ -560,15 +773,12 @@ class MapController {
     return _isNavigating && _currentRoute.isNotEmpty && _currentTarget != null;
   }
 
-  // Clean up resources
   void dispose() {
+    _locationSyncTimer?.cancel();
     clearPassengerMarkers();
     clearRoute();
     clearDestinationPreview();
-
-    // Unregister from LocationBridge
     LocationBridge().unregisterMapController(this);
-
     _mapController = null;
   }
 }
