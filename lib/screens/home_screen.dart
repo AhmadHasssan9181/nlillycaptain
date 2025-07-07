@@ -66,6 +66,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Timer? _routeCheckTimer;
 
+  bool _continuousRouteUpdateEnabled = false;
+  Timer? _continuousRouteUpdateTimer;
+  DateTime _lastRecalculation = DateTime.now();
+
   @override
   void initState() {
     super.initState();
@@ -388,6 +392,171 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
+  // New method to handle a single route recalculation
+  void _doSingleRouteRecalculation({bool showSnackbar = true}) {
+    if (_mapController.mapController != null) {
+      if (showSnackbar) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Recalculating route...'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
+      _mapController.mapController!.requestMyLocationLatLng().then((location) {
+        if (location != null) {
+          // Use the existing recalculation method but control snackbar display
+          if (_rideController.currentRide != null) {
+            // Determine destination based on ride state
+            LatLng destination;
+            if (_rideController.rideState == RideState.enrouteToPickup) {
+              destination = LatLng(
+                  _rideController.currentRide!.pickupLat,
+                  _rideController.currentRide!.pickupLng
+              );
+            } else {
+              destination = LatLng(
+                  _rideController.currentRide!.destinationLat,
+                  _rideController.currentRide!.destinationLng
+              );
+            }
+
+            // Clear existing route
+            _mapController.clearRoute();
+
+            // Calculate new route
+            _mapController.showRouteToLocation(destination).then((success) {
+              if (success && showSnackbar) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Route recalculated successfully'),
+                    backgroundColor: Colors.green,
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              } else if (!success && showSnackbar) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to recalculate route'),
+                    backgroundColor: Colors.red,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            });
+          }
+        } else if (showSnackbar) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Cannot get current position'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      });
+    } else if (showSnackbar) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot recalculate: Map not ready'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _toggleContinuousRouteUpdates() {
+    setState(() {
+      _continuousRouteUpdateEnabled = !_continuousRouteUpdateEnabled;
+    });
+
+    if (_continuousRouteUpdateEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Continuous route updates enabled (every 2 sec)'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      // Start the timer for continuous updates with 2-second interval
+      _continuousRouteUpdateTimer?.cancel();
+      _continuousRouteUpdateTimer = Timer.periodic(Duration(seconds: 2), (timer) {
+        if (!mounted || !_continuousRouteUpdateEnabled) {
+          timer.cancel();
+          _continuousRouteUpdateTimer = null;
+          return;
+        }
+
+        // Check if enough time has passed since last recalculation
+        final now = DateTime.now();
+        if (now.difference(_lastRecalculation).inSeconds < 2) {
+          return; // Skip this update cycle if it's too soon
+        }
+
+        // Only get the current location from the device position API
+        // This ensures we don't move the dot artificially
+        if (_mapController.mapController != null) {
+          _mapController.mapController!.requestMyLocationLatLng().then((location) {
+            if (location != null && mounted) {
+              // Use this location only for route calculation, not for updating position
+              _recalculateRouteWithActualPosition(location);
+              _lastRecalculation = DateTime.now();
+            }
+          });
+        }
+      });
+    } else {
+      // Stop continuous updates
+      _continuousRouteUpdateTimer?.cancel();
+      _continuousRouteUpdateTimer = null;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Continuous route updates disabled'),
+          backgroundColor: Colors.grey,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _recalculateRouteWithActualPosition(LatLng location) {
+    if (_rideController.currentRide != null) {
+      // Determine destination based on ride state
+      LatLng destination;
+      if (_rideController.rideState == RideState.enrouteToPickup) {
+        destination = LatLng(
+            _rideController.currentRide!.pickupLat,
+            _rideController.currentRide!.pickupLng
+        );
+      } else {
+        destination = LatLng(
+            _rideController.currentRide!.destinationLat,
+            _rideController.currentRide!.destinationLng
+        );
+      }
+
+      // Clear existing route
+      _mapController.clearRoute();
+
+      // Calculate new route from actual position to destination
+      // WITHOUT updating the displayed position marker
+      _mapController.showRouteToLocation(destination).then((success) {
+        if (!success) {
+          print("Failed to recalculate route");
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Show specific screens when active
@@ -463,48 +632,87 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
 
               // Manual recalculate button - only when in a ride
+              // Manual recalculate button - only when in a ride
               if (_rideController.isInRide)
                 Positioned(
                   right: 16,
                   top: MediaQuery.of(context).size.height / 2 - 28,
                   child: FloatingActionButton(
                     onPressed: () {
-                      if (_mapController.mapController != null) {
+                      if (_continuousRouteUpdateEnabled) {
+                        // STOP automatic recalculation
+                        _continuousRouteUpdateTimer?.cancel();
+                        _continuousRouteUpdateTimer = null;
+                        setState(() {
+                          _continuousRouteUpdateEnabled = false;
+                        });
+
+                        ScaffoldMessenger.of(context).hideCurrentSnackBar();
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Recalculating route...'),
+                            content: Text('Auto recalculation disabled'),
+                            backgroundColor: Colors.grey,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      } else {
+                        // START automatic recalculation
+                        setState(() {
+                          _continuousRouteUpdateEnabled = true;
+                        });
+
+                        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Auto recalculation enabled (every 10 sec)'),  // Updated to 10 sec
+                            backgroundColor: Colors.green,
                             duration: Duration(seconds: 2),
                           ),
                         );
 
-                        _mapController.mapController!.requestMyLocationLatLng().then((location) {
-                          if (location != null) {
-                            _recalculateRouteFromLocation(location);
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Cannot get current position'),
-                                backgroundColor: Colors.red,
-                                duration: Duration(seconds: 3),
-                              ),
-                            );
+                        // First immediate calculation
+                        _doSingleRouteRecalculation();
+
+                        // Set up STRICT 10-second timer (changed from 3 seconds)
+                        _continuousRouteUpdateTimer?.cancel(); // Cancel any existing timer
+                        _continuousRouteUpdateTimer = Timer.periodic(Duration(seconds: 10), (timer) {  // Changed to 10 seconds
+                          if (!mounted || !_continuousRouteUpdateEnabled) {
+                            timer.cancel();
+                            _continuousRouteUpdateTimer = null;
+                            return;
                           }
+
+                          print("🔄 Auto recalculation at ${DateTime.now().toIso8601String()}");
+                          _doSingleRouteRecalculation(showSnackbar: false);
                         });
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Cannot recalculate: Map not ready'),
-                            backgroundColor: Colors.red,
-                            duration: Duration(seconds: 3),
-                          ),
-                        );
                       }
                     },
-                    backgroundColor: Color(0xFFFF4B6C),
+                    backgroundColor: _continuousRouteUpdateEnabled ? Colors.green : Color(0xFFFF4B6C),
                     elevation: 4,
                     heroTag: "recalculateRoute",
-                    tooltip: "Recalculate route",
-                    child: Icon(Icons.refresh, color: Colors.white),
+                    tooltip: _continuousRouteUpdateEnabled ? "Stop auto recalculation" : "Recalculate route",
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Icon(
+                            _continuousRouteUpdateEnabled ? Icons.autorenew : Icons.refresh,
+                            color: Colors.white
+                        ),
+                        if (_continuousRouteUpdateEnabled)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
 
@@ -2628,9 +2836,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
+
   @override
   void dispose() {
     // Cancel all timers
+    _continuousRouteUpdateTimer?.cancel();
     _autoFindTimer?.cancel();
     _locationSyncTimer?.cancel();
 
