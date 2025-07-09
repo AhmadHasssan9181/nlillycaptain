@@ -71,6 +71,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  flutter_native_splash: ^2.3.1
+  flutter_launcher_icons: ^0.13.1
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -116,3 +118,18 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+flutter_native_splash:
+  color: "#fdc9cd"  # Hex value for pink[200]
+  image: assets/images/captain_lilyimage.png
+  android_12:
+    image: assets/images/captain_lilyimage.png
+    color: "#fdc9cd"  # Hex value for pink[200]
+  web: false
+
+flutter_launcher_icons:
+  android: "launcher_icon"  # This is the icon name for Android
+  ios: false                 # Creates iOS icons
+  image_path: "assets/images/lilly_captain.png"  # Your icon image
+  adaptive_icon_background: "#F48FB1"  # Background color for adaptive icons (Android 8.0+)
+  adaptive_icon_foreground: "assets/images/lilly_captain.png"  # Foreground image for adaptive icons
+  min_sdk_android: 21      # Minimum SDK version
